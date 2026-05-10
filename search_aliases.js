@@ -1,0 +1,2 @@
+window.SEARCH_ALIASES = {
+};
