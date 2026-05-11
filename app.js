@@ -2022,6 +2022,10 @@
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
     return rect.top >= 0 && rect.left >= 0 && rect.bottom <= viewportHeight && rect.right <= viewportWidth;
   }
+  
+  function escapeHtmlWithBr(value) {
+    return escapeHtml(value).replace(/\r?\n/g, "<br>");
+  }
 
   function showLikeNoticeModal(title, message) {
     if (!els.likeDisabledModal) {
@@ -2032,8 +2036,7 @@
     const safeMessage = String(message || "");
 
     if (els.likeNoticeModalMessage) {
-      els.likeNoticeModalMessage.innerHTML = `<strong>${escapeHtml(safeTitle)}</strong><br>${escapeHtml(safeMessage).replace(/\n|
-/g, "<br>")}`;
+      els.likeNoticeModalMessage.innerHTML = `<strong>${escapeHtml(safeTitle)}</strong><br>${escapeHtmlWithBr(safeMessage)}`;
     }
     window.clearTimeout(likeDisabledModalTimer);
     els.likeDisabledModal.hidden = false;
