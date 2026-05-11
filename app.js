@@ -19,7 +19,8 @@
     likes_last_1d: 10,
     likes_last_7d: 10,
     likes_last_30d: 10,
-    likes_total: 30
+    likes_total: 30,
+    my_liked: 10
   };
   const RECOMMEND_MORE_STEP = 10;
   const DATE_INITIAL_COUNT = 10;
@@ -427,7 +428,17 @@
       renderNotice(currentNoticeItems);
       renderFooter();
       renderCoverSection();
-      writeLocalJsonCache({ data: allSongs, notices: currentNoticeItems, footerText: currentFooterText, title: document.title, h1: els.pageTitle ? els.pageTitle.textContent : "", h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true, covers: coverItems, settings: { like_post_enabled: likePostEnabled }, saved_at: Date.now() });
+      writeLocalJsonCache({ 
+        data: allSongs,
+        notices: currentNoticeItems,
+        footerText: currentFooterText,
+        title: document.title,
+        h1: els.pageTitle ? els.pageTitle.textContent : "",
+        h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true,
+        covers: coverItems,
+        settings: { like_post_enabled: likePostEnabled },
+        saved_at: Date.now()
+      });
 
       buildFilters(allSongs);
       applyAndRender(true);
@@ -766,9 +777,13 @@
     if (recommendMode === "random") {
       els.recommendMoreButton.hidden = getRandomUniqueLinkedCandidates(filteredSongs).length <= 5;
       els.recommendMoreButton.textContent = "다시 추천";
+    } else if (recommendMode === "my_liked") {
+      const totalMyLiked = getMyLikedRecommendItems(filteredSongs).length;
+      els.recommendMoreButton.hidden = recommendVisibleCount >= totalMyLiked;
+      els.recommendMoreButton.textContent = "더 보기";
     } else {
       els.recommendMoreButton.hidden = recommendVisibleCount >= filteredSongs.length;
-      els.recommendMoreButton.textContent = "추천순 더 보기";
+      els.recommendMoreButton.textContent = "더 보기";
     }
   }
 
@@ -795,10 +810,24 @@
 
       return items;
     }
+    
+    if (recommendMode === "my_liked") {
+      return getMyLikedRecommendItems(filteredSongs).slice(0, recommendVisibleCount);
+    }
 
     return [...filteredSongs]
       .sort((a, b) => compareRecommend(a, b, recommendMode))
       .slice(0, recommendVisibleCount);
+  }
+  
+  function getMyLikedRecommendItems(songs) {
+    return [...songs]
+      .filter(song => isLocallyLiked(song.id))
+      .sort((a, b) => {
+        const byLikes = toNumber(b.likes_total) - toNumber(a.likes_total);
+        if (byLikes) return byLikes;
+        return compareDateDesc(a, b);
+      });
   }
 
   function getRecommendDescription(count) {
@@ -807,7 +836,8 @@
       likes_last_1d: `최근 1일 추천순 ${count}개를 표시합니다.`,
       likes_last_7d: `최근 7일 추천순 ${count}개를 표시합니다.`,
       likes_last_30d: `최근 30일 추천순 ${count}개를 표시합니다.`,
-      likes_total: `전체 추천순 ${count}개를 표시합니다.`
+      likes_total: `전체 추천순 ${count}개를 표시합니다.`,
+      my_liked: `내가 추천한 곡들을 전체 추천수순으로 ${count}개 표시합니다.`
     };
     return labels[recommendMode] || "추천순으로 표시합니다.";
   }
