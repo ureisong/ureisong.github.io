@@ -110,8 +110,22 @@
     updateFilterSummaryHelp();
     startCooldownTimer();
     startCoverAutoTimer();
+    bindResponsiveRender();
     await loadSearchAliases();
     await loadData();
+  }
+  
+  function bindResponsiveRender() {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia("(max-width: 560px)");
+    const rerender = () => {
+      if (recommendMode === "random") renderRecommendSection();
+    };
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", rerender);
+    } else if (typeof mq.addListener === "function") {
+      mq.addListener(rerender);
+    }
   }
 
   function bindEvents() {
@@ -174,7 +188,7 @@
       button.addEventListener("click", () => {
         recommendMode = button.dataset.recommendMode;
         recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
-        if (recommendMode === "random") randomPoolIds = makeRandomPoolIds(filteredSongs);
+        if (recommendMode === "random") randomPoolIds = makeRandomUniqueLinkedPoolIds(filteredSongs);
 
         document.querySelectorAll("[data-recommend-mode]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
@@ -184,7 +198,7 @@
 
     els.recommendMoreButton.addEventListener("click", () => {
       if (recommendMode === "random") {
-        randomPoolIds = makeRandomPoolIds(filteredSongs);
+        randomPoolIds = makeRandomUniqueLinkedPoolIds(filteredSongs);
       } else {
         recommendVisibleCount += RECOMMEND_MORE_STEP;
       }
@@ -292,16 +306,16 @@
       return;
     }
 
-    if (!forceNetwork) {
-      const cached = readSearchAliasesCache();
-      if (cached) {
-        searchAliases = cached;
-        return;
-      }
-    }
+    //if (!forceNetwork) {
+    //  const cached = readSearchAliasesCache();
+    //  if (cached) {
+    //    searchAliases = cached;
+    //    return;
+    //  }
+    //}
 
     try {
-      const csvText = await fetchText(SEARCH_ALIASES_CSV_URL, forceNetwork);
+      const csvText = await fetchText(SEARCH_ALIASES_CSV_URL, true);    //, forceNetwork);
       const rows = parseCsv(csvText);
       searchAliases = normalizeSearchAliasesRows(rows);
       writeSearchAliasesCache(searchAliases);
@@ -388,7 +402,7 @@
     try {
       localStorage.setItem("search_aliases", JSON.stringify({
         saved_at: Date.now(),
-        expires_at: Date.now() + 24 * 60 * 60 * 1000,
+        //expires_at: Date.now() + 24 * 60 * 60 * 1000,
         data: normalizeSearchAliasesObject(data)
       }));
     } catch {
@@ -776,7 +790,7 @@
     bindFilterButtons(els.recommendList);
 
     if (recommendMode === "random") {
-      els.recommendMoreButton.hidden = getRandomUniqueLinkedCandidates(filteredSongs).length <= 5;
+      els.recommendMoreButton.hidden = getRandomUniqueLinkedCandidates(filteredSongs).length <= getRandomRecommendLimit();
       els.recommendMoreButton.textContent = "다시 추천";
     } else if (recommendMode === "my_liked") {
       const totalMyLiked = getMyLikedRecommendItems(filteredSongs).length;
@@ -806,7 +820,7 @@
         usedKeys.add(key);
         items.push(song);
 
-        if (items.length >= RECOMMEND_LIMITS.random) break;
+        if (items.length >= getRandomRecommendLimit()) break;
       }
 
       return items;
@@ -1111,7 +1125,10 @@
       ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(artistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}">${escapeHtml(titleText)}</button>`
       : `<span class="song-title-missing" title="다시보기가 없습니다">${escapeHtml(titleText)}</span>`;
 
-    const titleHtml = `${titleCoreHtml}<button class="inline-filter-button title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
+    const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
+    const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
+    const title = `${titleCoreHtml}<button class="inline-filter-button title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
+    const titleHtml = `${titleCoreHtml}${titleFilterButton}`;
 
     const timelineHtml = song.timeline
       ? timelineUrl
@@ -1133,6 +1150,7 @@
             <button class="badge badge-button" type="button" data-filter-type="category" data-filter-value="${escapeHtml(song.category || "미분류")}">${escapeHtml(song.category || "미분류")}</button>
             <button class="badge badge-button" type="button" data-filter-type="country" data-filter-value="${escapeHtml(song.country || "국가 없음")}">${escapeHtml(song.country || "국가 없음")}</button>
             ${timelineHtml}
+            ${mobileTitleFilterButton}
             ${subLinksHtml}
           </div>
         </div>
@@ -1332,13 +1350,20 @@
     const ss = String(d.getSeconds()).padStart(2, "0");
     return `${yy}/${mm}/${dd} ${hh}:${mi}:${ss}`;
   }
+  
+  function getRandomRecommendLimit() {
+    return isMobileViewport() ? 3 : RECOMMEND_LIMITS.random;
+  }
+
+  function isMobileViewport() {
+    return window.matchMedia && window.matchMedia("(max-width: 560px)").matches;
+  }
 
   function makeRandomPoolIds(songs) {
     return [...songs]
       .sort(() => Math.random() - 0.5)
       .map(song => song.id);
   }
-
 
   function hasPlayableLink(song) {
     return isRandomRecommendCandidate(song);
