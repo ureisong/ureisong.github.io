@@ -405,6 +405,7 @@
           allSongs = normalizeSongs(cached.data || cached);
           currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
+          applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
           coverItems = normalizeCoverItems(cached.covers || []);
           likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
           renderNotice(currentNoticeItems);
@@ -420,12 +421,13 @@
       allSongs = normalizeSongs(payload.data || payload || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
+      applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
       coverItems = normalizeCoverItems(payload.covers || []);
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       renderNotice(currentNoticeItems);
       renderFooter();
       renderCoverSection();
-      writeLocalJsonCache({ data: allSongs, notices: currentNoticeItems, footerText: currentFooterText, covers: coverItems, settings: { like_post_enabled: likePostEnabled }, saved_at: Date.now() });
+      writeLocalJsonCache({ data: allSongs, notices: currentNoticeItems, footerText: currentFooterText, title: document.title, h1: els.pageTitle ? els.pageTitle.textContent : "", h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true, covers: coverItems, settings: { like_post_enabled: likePostEnabled }, saved_at: Date.now() });
 
       buildFilters(allSongs);
       applyAndRender(true);
@@ -437,6 +439,7 @@
         allSongs = normalizeSongs(cached.data || cached);
         currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
         currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
+        applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
         coverItems = normalizeCoverItems(cached.covers || []);
         likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
         renderNotice(currentNoticeItems);
@@ -491,6 +494,7 @@
       const notices = extractNoticeItemsFromRows(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
       const footerText = extractFooterTextFromRows(noticeRows);
+      const pageMeta = extractPageMetaFromRows(noticeRows);
       const settings = extractSettingsFromRows(settingsRows);
 
       return {
@@ -498,6 +502,9 @@
         notices,
         covers,
         footerText,
+        title: pageMeta.title,
+        h1: pageMeta.h1,
+        h1Visible: pageMeta.h1Visible,
         settings
       };
     }
@@ -513,6 +520,9 @@
       notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
       covers: Array.isArray(json) ? [] : (json.covers || []),
       footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
+      title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
+      h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
+      h1Visible: Array.isArray(json) ? true : (json.h1Visible !== false),
       settings: Array.isArray(json) ? null : (json.settings || null)
     };
   }
@@ -1649,6 +1659,38 @@
     if (["false", "0", "no", "off", "n", "비활성", "중지"].includes(value)) return false;
     if (["true", "1", "yes", "on", "y", "활성"].includes(value)) return true;
     return fallback;
+  }
+  
+  function extractPageMetaFromRows(rows) {
+    const titleRow = findNoticeRowByKey(rows, "title");
+    const h1Row = findNoticeRowByKey(rows, "h1");
+    const h1VisibleRaw = h1Row ? String(h1Row.link || "").trim().toUpperCase() : "";
+
+    return {
+      title: titleRow ? String(titleRow.value || "").trim() : "",
+      h1: h1Row ? String(h1Row.value || "").trim() : "",
+      h1Visible: h1VisibleRaw === "FALSE" ? false : true
+    };
+  }
+
+  function findNoticeRowByKey(rows, keyName) {
+    const targetKey = String(keyName || "").trim().toLowerCase();
+    return rows.find(row =>
+      String(row.key || "").trim().toLowerCase() === targetKey &&
+      String(row.value || "").trim()
+    ) || null;
+  }
+
+  function applyPageTitleValues(titleValue, h1Value, h1Visible = true) {
+    const titleText = String(titleValue || "").trim();
+    const h1Text = String(h1Value || "").trim();
+
+    document.title = titleText || DEFAULT_DOCUMENT_TITLE;
+
+    if (els.pageTitle) {
+      els.pageTitle.textContent = h1Text || DEFAULT_H1_TEXT;
+      els.pageTitle.style.display = h1Visible === false ? "none" : "";
+    }
   }
 
   function extractNoticeItemsFromRows(rows) {
