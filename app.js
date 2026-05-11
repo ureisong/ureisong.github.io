@@ -209,6 +209,13 @@
           if (els.filterDetails) els.filterDetails.open = false;
           if (els.recommendDetails) els.recommendDetails.open = false;
           if (els.dateDetails) els.dateDetails.open = false;
+
+          window.setTimeout(() => {
+            els.sungDetails.scrollIntoView({
+              behavior: "smooth",
+              block: "start"
+            });
+          }, 80);
         }
       });
     }
