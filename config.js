@@ -1,5 +1,5 @@
 window.APP_CONFIG = {
-  API_URL: "https://script.google.com/macros/s/AKfycbx8bBL_2PqVj5XbK7KhUjyuxG3l8nwkqkJWuLzDS3LVOr5v_-1v-y_X9CoBYHylijmhjg/exec",
+  API_URL: "https://script.google.com/macros/s/AKfycbz40cSAj_j7beL0uU6nEurO0X5Rp_nLBkLwTiAhx9hRmPs5wMZEa6exq3nXxOtVAEo/exec",
   DATA_URL: "./data.json",
   SONGS_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTznVKN0u7Eei7Dz4wvlDYaHd_PR-a-2taqdzO1nP5TMLrWTccvjXPLgUKeArHuVl00SlJNsqV36p0n/pub?gid=1754859151&single=true&output=csv",
   LIKES_SMR_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTznVKN0u7Eei7Dz4wvlDYaHd_PR-a-2taqdzO1nP5TMLrWTccvjXPLgUKeArHuVl00SlJNsqV36p0n/pub?gid=2053464052&single=true&output=csv",
