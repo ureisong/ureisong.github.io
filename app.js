@@ -68,6 +68,7 @@
     modalLikePanel: document.getElementById("modalLikePanel"),
     likeDisabledModal: document.getElementById("likeDisabledModal"),
     likeDisabledModalClose: document.getElementById("likeDisabledModalClose"),
+    likeNoticeModalMessage: document.getElementById("likeNoticeModalMessage"),
     pageLoading: document.getElementById("pageLoading"),
     pageLoadingText: document.getElementById("pageLoadingText"),
     youtubeLoading: document.getElementById("youtubeLoading"),
@@ -810,7 +811,7 @@
 
       return items;
     }
-    
+
     if (recommendMode === "my_liked") {
       return getMyLikedRecommendItems(filteredSongs).slice(0, recommendVisibleCount);
     }
@@ -819,7 +820,7 @@
       .sort((a, b) => compareRecommend(a, b, recommendMode))
       .slice(0, recommendVisibleCount);
   }
-  
+
   function getMyLikedRecommendItems(songs) {
     return [...songs]
       .filter(song => isLocallyLiked(song.id))
@@ -1162,8 +1163,10 @@
 
     const remain = getLikeCooldownRemainingMs();
     if (remain > 0) {
-      console.log(`[❌] ${label} · cooldown-local ${Math.ceil(remain / 1000)}s`);
-      showCooldownText(`${Math.ceil(remain / 1000)}초 후 다시 누를 수 있습니다.`);
+      const remainSec = Math.ceil(remain / 1000);
+      console.log(`[❌] ${label} · cooldown-local ${remainSec}s`);
+      showCooldownText(`${remainSec}초 후 다시 누를 수 있습니다.`);
+      showLikeNoticeModal("[알림]", `${remainSec}초 후 가능합니다`);
       return;
     }
 
@@ -1690,7 +1693,7 @@
     if (["true", "1", "yes", "on", "y", "활성"].includes(value)) return true;
     return fallback;
   }
-  
+ 
   function extractPageMetaFromRows(rows) {
     const titleRow = findNoticeRowByKey(rows, "title");
     const h1Row = findNoticeRowByKey(rows, "h1");
@@ -2020,15 +2023,26 @@
     return rect.top >= 0 && rect.left >= 0 && rect.bottom <= viewportHeight && rect.right <= viewportWidth;
   }
 
-  function showLikeDisabledModal() {
+  function showLikeNoticeModal(title, message) {
     if (!els.likeDisabledModal) {
-      showCooldownText("지금은 좋아요 를 누를 수 없습니다");
+      showCooldownText(String(message || ""));
       return;
+    }
+    const safeTitle = String(title || "[알림]");
+    const safeMessage = String(message || "");
+
+    if (els.likeNoticeModalMessage) {
+      els.likeNoticeModalMessage.innerHTML = `<strong>${escapeHtml(safeTitle)}</strong><br>${escapeHtml(safeMessage).replace(/\n|
+/g, "<br>")}`;
     }
     window.clearTimeout(likeDisabledModalTimer);
     els.likeDisabledModal.hidden = false;
     document.body.classList.add("modal-open");
     likeDisabledModalTimer = window.setTimeout(closeLikeDisabledModal, 3000);
+  }
+  
+  function showLikeDisabledModal() {
+    showLikeNoticeModal("[점검]", "지금은 좋아요 를 누를 수 없습니다");
   }
 
   function closeLikeDisabledModal() {
