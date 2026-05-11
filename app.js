@@ -9,8 +9,12 @@
   const NOTICE_CSV_URL = CONFIG.NOTICE_CSV_URL || "";
   const SETTINGS_CSV_URL = CONFIG.SETTINGS_CSV_URL || "";
   const SEARCH_ALIASES_CSV_URL = CONFIG.SEARCH_ALIASES_CSV_URL || "";
+  const CSV_CACHE_PREFIX = "csv_cache_";
+  const SETTINGS_VERSION_SONGS = "version_songs";
+  const SETTINGS_VERSION_SEARCH_ALIASES = "version_search_aliases";
   const LIKE_COOLDOWN_MS = Number(CONFIG.LIKE_COOLDOWN_MS || 60000);
   let searchAliases = {};
+  let currentSettingsRows = [];
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
 
@@ -111,8 +115,9 @@
     startCooldownTimer();
     startCoverAutoTimer();
     bindResponsiveRender();
-    await loadSearchAliases();
-    await loadData();
+    currentSettingsRows = await loadSettingsRows();
+    await loadSearchAliases(false, currentSettingsRows);
+    await loadData(false, currentSettingsRows);
   }
   
   function bindResponsiveRender() {
@@ -298,7 +303,7 @@
   }
 
 
-  async function loadSearchAliases(forceNetwork = false) {
+  async function loadSearchAliases(forceNetwork = false, settingsRows = null) {
     const fallback = window.SEARCH_ALIASES || {};
 
     if (!SEARCH_ALIASES_CSV_URL) {
@@ -306,23 +311,21 @@
       return;
     }
 
-    //if (!forceNetwork) {
-    //  const cached = readSearchAliasesCache();
-    //  if (cached) {
-    //    searchAliases = cached;
-    //    return;
-    //  }
-    //}
-
     try {
-      const csvText = await fetchText(SEARCH_ALIASES_CSV_URL, true);    //, forceNetwork);
-      const rows = parseCsv(csvText);
-      searchAliases = normalizeSearchAliasesRows(rows);
-      writeSearchAliasesCache(searchAliases);
+      const rows = settingsRows || currentSettingsRows || await loadSettingsRows();
+      const version = getSettingValue(rows, SETTINGS_VERSION_SEARCH_ALIASES);
+      const aliasRows = await loadVersionedCsvRows({
+        cacheName: "search_aliases",
+        url: SEARCH_ALIASES_CSV_URL,
+        version,
+        forceNetwork
+      });
+
+      searchAliases = normalizeSearchAliasesRows(aliasRows);
     } catch (err) {
       console.warn("[search_aliases 로딩 실패]", err);
-      const cached = readSearchAliasesCache(true);
-      searchAliases = cached || normalizeSearchAliasesObject(fallback);
+      const cached = readVersionedCsvCache("search_aliases");
+      searchAliases = cached ? normalizeSearchAliasesRows(cached.rows || []) : normalizeSearchAliasesObject(fallback);
     }
   }
 
@@ -379,38 +382,67 @@
       .trim();
   }
 
-  function readSearchAliasesCache(allowExpired = false) {
+  async function loadSettingsRows() {
+    if (!SETTINGS_CSV_URL) return [];
+
     try {
-      const raw = localStorage.getItem("search_aliases");
-      if (!raw) return null;
+      const text = await fetchText(SETTINGS_CSV_URL, true);
+      return parseCsv(text);
+    } catch (err) {
+      console.warn("[settings 로딩 실패]", err);
+      return [];
+    }
+  }
 
-      const cached = JSON.parse(raw);
-      const expiresAt = Number(cached.expires_at || 0);
+  function getSettingValue(rows, keyName) {
+    const target = String(keyName || "").trim();
+    const row = (rows || []).find(item => String(item.key || "").trim() === target);
+    return row ? String(row.value || "").trim() : "";
+  }
 
-      if (!allowExpired && expiresAt && Date.now() > expiresAt) {
-        localStorage.removeItem("search_aliases");
-        return null;
-      }
+  async function loadVersionedCsvRows({ cacheName, url, version, forceNetwork = false }) {
+    const normalizedVersion = String(version || "").trim();
+    const cached = readVersionedCsvCache(cacheName);
 
-      return normalizeSearchAliasesObject(cached.data || {});
+    if (!forceNetwork && normalizedVersion && cached && cached.version && compareVersionText(cached.version, normalizedVersion) >= 0) {
+      return cached.rows || [];
+    }
+
+    const text = await fetchText(url, true);
+    const rows = parseCsv(text);
+    writeVersionedCsvCache(cacheName, rows, normalizedVersion || String(Date.now()));
+    return rows;
+  }
+
+  function readVersionedCsvCache(cacheName) {
+    try {
+      const raw = localStorage.getItem(CSV_CACHE_PREFIX + cacheName);
+      return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
     }
   }
 
-  function writeSearchAliasesCache(data) {
+  function writeVersionedCsvCache(cacheName, rows, version) {
     try {
-      localStorage.setItem("search_aliases", JSON.stringify({
+      localStorage.setItem(CSV_CACHE_PREFIX + cacheName, JSON.stringify({
+        version: String(version || ""),
         saved_at: Date.now(),
-        //expires_at: Date.now() + 24 * 60 * 60 * 1000,
-        data: normalizeSearchAliasesObject(data)
+        rows
       }));
     } catch {
       //
     }
   }
 
-  async function loadData(forceNetwork = false) {
+  function compareVersionText(a, b) {
+    const aa = String(a || "").trim();
+    const bb = String(b || "").trim();
+    if (aa === bb) return 0;
+    return aa > bb ? 1 : -1;
+  }
+
+  async function loadData(forceNetwork = false, settingsRows = null) {
     showPageLoading(forceNetwork ? "데이터를 다시 불러오는 중..." : "데이터를 불러오는 중...");
     setStatus("데이터 로딩 중...");
 
@@ -433,7 +465,7 @@
         }
       }
 
-      const payload = await fetchSongsPayload(forceNetwork);
+      const payload = await fetchSongsPayload(forceNetwork, settingsRows);
       allSongs = normalizeSongs(payload.data || payload || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
@@ -489,42 +521,41 @@
     }
   }
 
-  async function fetchSongsPayload(forceNetwork) {
+  async function fetchSongsPayload(forceNetwork, settingsRows = null) {
     if (SONGS_CSV_URL && LIKES_SMR_CSV_URL) {
+      const effectiveSettingsRows = settingsRows || currentSettingsRows || await loadSettingsRows();
+      currentSettingsRows = effectiveSettingsRows;
+
+      const songsVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS);
+
       const tasks = [
-        fetchText(SONGS_CSV_URL, forceNetwork),
-        fetchText(LIKES_SMR_CSV_URL, forceNetwork)
+        loadVersionedCsvRows({
+          cacheName: "songs",
+          url: SONGS_CSV_URL,
+          version: songsVersion,
+          forceNetwork
+        }),
+        fetchText(LIKES_SMR_CSV_URL, forceNetwork).then(parseCsv)
       ];
 
       if (NOTICE_CSV_URL) {
-        tasks.push(fetchText(NOTICE_CSV_URL, forceNetwork).catch(err => {
-          console.warn("[notice 로딩 실패]", err);
-          return "";
+        tasks.push(fetchText(NOTICE_CSV_URL, forceNetwork).then(parseCsv).catch(err => {
+          console.warn("[notice CSV 로딩 실패]", err);
+          return [];
         }));
       } else {
-        tasks.push(Promise.resolve(""));
+        tasks.push(Promise.resolve([]));
       }
 
-      if (SETTINGS_CSV_URL) {
-        tasks.push(fetchText(SETTINGS_CSV_URL, forceNetwork).catch(err => {
-          console.warn("[settings 로딩 실패]", err);
-          return "";
-        }));
-      } else {
-        tasks.push(Promise.resolve(""));
-      }
-
-      const [songsText, likesText, noticeText = "", settingsText = ""] = await Promise.all(tasks);
-      const noticeRows = NOTICE_CSV_URL && noticeText ? parseCsv(noticeText) : [];
-      const settingsRows = SETTINGS_CSV_URL && settingsText ? parseCsv(settingsText) : [];
+      const [songsRows, likesRows, noticeRows = []] = await Promise.all(tasks);
       const notices = extractNoticeItemsFromRows(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
       const footerText = extractFooterTextFromRows(noticeRows);
       const pageMeta = extractPageMetaFromRows(noticeRows);
-      const settings = extractSettingsFromRows(settingsRows);
+      const settings = extractSettingsFromRows(effectiveSettingsRows);
 
       return {
-        data: mergeSongsAndLikes(parseCsv(songsText), parseCsv(likesText)),
+        data: mergeSongsAndLikes(songsRows, likesRows),
         notices,
         covers,
         footerText,
