@@ -2231,7 +2231,7 @@
 
     const wrap = document.createElement("label");
     wrap.className = "darkmode-toggle";
-    wrap.innerHTML = '<input type="checkbox" id="darkModeToggle"> 다크';
+    wrap.innerHTML = '<input type="checkbox" id="darkModeToggle"> 다크모드';
 
     statusBox.appendChild(wrap);
 
