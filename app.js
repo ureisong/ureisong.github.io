@@ -1726,6 +1726,7 @@
       ...artistValues,
       ...categoryValues,
       ...countryValues,
+      song.id,
       song.day_p,
       song.timeline,
       formatPlainDate(song),
