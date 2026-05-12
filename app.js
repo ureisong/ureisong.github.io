@@ -81,7 +81,7 @@
     footerText: document.getElementById("footerText")
   };
   
-  const DEFAULT_DOCUMENT_TITLE = document.title || "유레이 노래 도감";
+  const DEFAULT_DOCUMENT_TITLE = document.title || "들어줄레이🍇👻";
   const DEFAULT_H1_TEXT = els.pageTitle ? els.pageTitle.textContent : DEFAULT_DOCUMENT_TITLE;
 
   let allSongs = [];
