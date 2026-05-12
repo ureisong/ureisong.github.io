@@ -75,6 +75,7 @@
     likeNoticeModalMessage: document.getElementById("likeNoticeModalMessage"),
     pageLoading: document.getElementById("pageLoading"),
     pageLoadingText: document.getElementById("pageLoadingText"),
+    pageLoadingSubText: document.getElementById("pageLoadingSubText"),    
     youtubeLoading: document.getElementById("youtubeLoading"),
     noticeText: document.getElementById("noticeText"),
     footerText: document.getElementById("footerText")
@@ -106,16 +107,20 @@
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
-    showPageLoading("데이터를 불러오는 중...");
+    showPageLoading("...LOADING...", "초기화면 준비 중.");
     bindEvents();
     setupFavicon();
+    showPageLoading("...LOADING...", "공지사항 읽는 중..");
     renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
     renderFooter();
+    showPageLoading("...LOADING...", "필터 만드는 중...");
     updateFilterSummaryHelp();
     startCooldownTimer();
     startCoverAutoTimer();
     bindResponsiveRender();
+    showPageLoading("...LOADING...", "설정 불러오는 중....");
     currentSettingsRows = await loadSettingsRows();
+    showPageLoading("...LOADING...", "설정 불러오는 중.....");
     await loadSearchAliases(false, currentSettingsRows);
     await loadData(false, currentSettingsRows);
   }
@@ -443,7 +448,7 @@
   }
 
   async function loadData(forceNetwork = false, settingsRows = null) {
-    showPageLoading(forceNetwork ? "데이터를 다시 불러오는 중..." : "데이터를 불러오는 중...");
+    showPageLoading("...LOADING...", forceNetwork ? "노래들을 새로 불러오고 있어요!" : "노래들을 불러오고 있어요!");
     setStatus("데이터 로딩 중...");
 
     try {
@@ -2127,9 +2132,10 @@
     return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
   }
 
-  function showPageLoading(message) {
+  function showPageLoading(message, sub="") {
     if (!els.pageLoading) return;
     if (els.pageLoadingText) els.pageLoadingText.textContent = message || "로딩 중...";
+    if (els.pageLoadingSubText) els.pageLoadingSubText.textContent = sub || "";
     els.pageLoading.hidden = false;
     document.body.classList.add("page-loading-open");
   }
