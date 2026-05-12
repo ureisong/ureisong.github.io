@@ -750,6 +750,10 @@
           title: String(item.title || ""),
           category: String(item.category || ""),
           country: String(item.country || ""),
+          artistValues: splitMultiValue(item.artist),
+          titleValues: splitMultiValue(item.title),
+          categoryValues: splitMultiValue(item.category),
+          countryValues: splitMultiValue(item.country),
           timeline: String(item.timeline || ""),
           link: String(item.link || ""),
           sub1: String(item.sub1 || ""),
@@ -768,8 +772,8 @@
   function buildFilters(songs) {
     fillSelectWithAll(els.yearFilter, uniqueSorted(songs.map(s => s.year).filter(Boolean), true));
     fillSelectWithAll(els.monthFilter, uniqueSorted(songs.map(s => s.month).filter(Boolean), false, true));
-    fillSelectWithAll(els.countryFilter, uniqueSorted(songs.map(s => s.country).filter(Boolean)));
-    fillSelectWithAll(els.categoryFilter, uniqueSorted(songs.map(s => s.category).filter(Boolean)));
+    fillSelectWithAll(els.countryFilter, uniqueSorted(songs.flatMap(getCountryValues)));
+    fillSelectWithAll(els.categoryFilter, uniqueSorted(songs.flatMap(getCategoryValues)));
     refreshDayFilterOptions();
   }
 
@@ -793,8 +797,8 @@
       if (years.length && !years.includes(song.year)) return false;
       if (months.length && !months.includes(song.month)) return false;
       if (days.length && !days.includes(song.day)) return false;
-      if (categories.length && !categories.includes(song.category)) return false;
-      if (countries.length && !countries.includes(song.country)) return false;
+      if (categories.length && !hasAnyMultiValue(getCategoryValues(song), categories)) return false;
+      if (countries.length && !hasAnyMultiValue(getCountryValues(song), countries)) return false;
 
       if (keywordTerms.length) {
         const haystack = getSearchHaystack(song, searchMode);
@@ -974,13 +978,25 @@
 
     [...songs].sort(compareDateDesc).forEach(song => {
       const titleText = getDisplayTitle(song);
-      const artistText = getDisplayArtist(song);
-      const key = mode === "artist"
-        ? `artist:${normalizeSearchText(artistText)}`
-        : `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
-      const label = mode === "artist"
-        ? artistText
-        : `${titleText} - ${artistText}`;
+      const artistValues = getArtistValues(song);
+
+      if (mode === "artist") {
+        artistValues.forEach(artist => {
+          const key = `artist:${normalizeSearchText(artist)}`;
+          const label = artist;
+
+          if (!map.has(key)) {
+            map.set(key, { key, label, items: [] });
+          }
+
+          map.get(key).items.push(song);
+        });
+        return;
+      }
+
+      const artistText = artistValues.join(" ") || getDisplayArtist(song);
+      const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
+      const label = `${titleText} - ${artistText}`;
 
       if (!map.has(key)) {
         map.set(key, { key, label, items: [] });
@@ -992,13 +1008,65 @@
       return b.items.length - a.items.length || a.label.localeCompare(b.label, "ko");
     });
   }
+  
+  function splitMultiValue(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return [];
+
+    const values = raw
+      .split(" & ")
+      .map(item => item.trim())
+      .filter(Boolean);
+
+    return values.length ? [...new Set(values)] : [];
+  }
+
+  function getTitleValues(song) {
+    const values = splitMultiValue(song.artist);
+    return values.length
+      ? values
+      : [String(song.artist || "").trim()].filter(Boolean);
+  }
+
+  function getArtistValues(song) {
+    const values = splitMultiValue(song.title);
+    return values.length
+      ? values
+      : [String(song.title || "").trim()].filter(Boolean);
+  }
+
+  function getCategoryValues(song) {
+    const values = Array.isArray(song.categoryValues) ? song.categoryValues : splitMultiValue(song.category);
+    return values.length ? values : [String(song.category || "").trim()].filter(Boolean);
+  }
+
+  function getCountryValues(song) {
+    const values = Array.isArray(song.countryValues) ? song.countryValues : splitMultiValue(song.country);
+    return values.length ? values : [String(song.country || "").trim()].filter(Boolean);
+  }
+
+  function hasAnyMultiValue(values, selected) {
+    const set = new Set((values || []).map(value => String(value)));
+    return selected.some(value => set.has(String(value)));
+  }
+
+  function renderMultiValueBadges(values, filterType, extraClass = "", fallback = "") {
+    const list = (values && values.length ? values : [fallback]).filter(Boolean);
+    const className = ["badge", "badge-button", extraClass].filter(Boolean).join(" ");
+
+    return list.map(value => `
+      <button class="${escapeHtml(className)}" type="button" data-filter-type="${escapeHtml(filterType)}" data-filter-value="${escapeHtml(value)}">${escapeHtml(value)}</button>
+    `).join("");
+  }
 
   function getDisplayTitle(song) {
-    return song.artist || "곡명 없음";
+    const values = getTitleValues(song);
+    return values.length ? values.join(" ") : "곡명 없음";
   }
 
   function getDisplayArtist(song) {
-    return song.title || "아티스트 없음";
+    const values = getArtistValues(song);
+    return values.length ? values.join(" ") : "아티스트 없음";
   }
 
   function bindLikeButtons(root) {
@@ -1173,6 +1241,9 @@
       : "";
 
     const subLinksHtml = renderSubLinks(song);
+    const artistBadgesHtml = renderMultiValueBadges(getArtistValues(song), "artist", "artist", "아티스트 정보 없음");
+    const categoryBadgesHtml = renderMultiValueBadges(getCategoryValues(song), "category", "", "미분류");
+    const countryBadgesHtml = renderMultiValueBadges(getCountryValues(song), "country", "", "미분류");
 
     const likeButtonHtml = renderLikeControls(song, liked);
 
@@ -1181,10 +1252,10 @@
         <div>
           <h3 class="song-title">${titleHtml}</h3>
           <div class="meta">
-            <button class="badge badge-button artist" type="button" data-filter-type="artist" data-filter-value="${escapeHtml(artistText)}">${escapeHtml(artistText)}</button>
+            ${artistBadgesHtml}
             <button class="badge badge-button" type="button" data-filter-type="date" data-filter-year="${escapeHtml(song.year)}" data-filter-month="${escapeHtml(song.month)}" data-filter-day="${escapeHtml(song.day)}" data-filter-date="${escapeHtml(formatPlainDate(song))}">${escapeHtml(dateText)}</button>
-            <button class="badge badge-button" type="button" data-filter-type="category" data-filter-value="${escapeHtml(song.category || "미분류")}">${escapeHtml(song.category || "미분류")}</button>
-            <button class="badge badge-button" type="button" data-filter-type="country" data-filter-value="${escapeHtml(song.country || "국가 없음")}">${escapeHtml(song.country || "국가 없음")}</button>
+            ${categoryBadgesHtml}
+            ${countryBadgesHtml}
             ${timelineHtml}
             ${mobileTitleFilterButton}
             ${subLinksHtml}
@@ -1629,15 +1700,17 @@
 
 
   function getSearchHaystack(song, mode) {
-    const title = getDisplayTitle(song);
-    const artist = getDisplayArtist(song);
+    const titleValues = [getDisplayTitle(song), ...getTitleValues(song)];
+    const artistValues = [getDisplayArtist(song), ...getArtistValues(song)];
+    const categoryValues = getCategoryValues(song);
+    const countryValues = getCountryValues(song);
 
     if (mode === "title") {
-      return normalizeSearchText(title);
+      return normalizeSearchText(titleValues.join(" "));
     }
 
     if (mode === "artist") {
-      return normalizeSearchText(artist);
+      return normalizeSearchText(artistValues.join(" "));
     }
 
     if (mode === "date") {
@@ -1645,8 +1718,12 @@
     }
 
     return normalizeSearchText([
-      title,
-      artist,
+      ...titleValues,
+      ...artistValues,
+      ...categoryValues,
+      ...countryValues,
+      song.day_p,
+      song.timeline,
       formatPlainDate(song),
       formatSongDate(song),
       `${song.year}-${song.month}-${song.day}`
@@ -1666,8 +1743,8 @@
       .filter(song => {
         if (years.length && !years.includes(song.year)) return false;
         if (months.length && !months.includes(song.month)) return false;
-        if (categories.length && !categories.includes(song.category)) return false;
-        if (countries.length && !countries.includes(song.country)) return false;
+        if (categories.length && !hasAnyMultiValue(getCategoryValues(song), categories)) return false;
+        if (countries.length && !hasAnyMultiValue(getCountryValues(song), countries)) return false;
         return Boolean(song.day);
       })
       .map(song => song.day);
