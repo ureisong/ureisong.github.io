@@ -1068,6 +1068,10 @@
     const values = getArtistValues(song);
     return values.length ? values.join(" ") : "아티스트 없음";
   }
+  
+  function formatPopupMultiText(value) {
+    return String(value || "").replaceAll(" & ", ", ");
+  }
 
   function bindLikeButtons(root) {
     root.querySelectorAll("[data-like-id]").forEach(button => {
@@ -1220,8 +1224,8 @@
     const liked = isLocallyLiked(song.id);
     const dateText = formatSongDate(song);
 
-    const titleText = getDisplayTitle(song);
-    const artistText = getDisplayArtist(song);
+    const titleText = String(song.artist || "").trim() || "곡명 없음";
+    const artistText = String(song.title || "").trim() || "아티스트 없음";
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
