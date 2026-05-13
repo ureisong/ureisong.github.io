@@ -816,6 +816,7 @@ html.dark-mode .like-button.liking {
   line-height: 1.25;
   word-break: keep-all;
   overflow-wrap: anywhere;
+  text-shadow: 0px 0px 3px #D8D8D8;
 }
 
 .modal-song-artist {
@@ -824,6 +825,7 @@ html.dark-mode .like-button.liking {
   font-size: 1rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-shadow: 0px 0px 3px #b7b7b7;
 }
 
 .modal-like-panel {
@@ -846,7 +848,8 @@ html.dark-mode .like-button.liking {
   border-radius: 0;
 }
 
-.youtube-frame-wrap iframe {
+.youtube-frame-wrap iframe,
+.youtube-frame-wrap .youtube-player-mount {
   width: 100%;
   height: 100%;
   border: 0;
@@ -857,17 +860,51 @@ html.dark-mode .like-button.liking {
   position: absolute;
   inset: 0;
   z-index: 5;
-  display: grid;
-  place-items: center;
+  display: block;
   background: rgba(5, 8, 14, 0.78);
   color: white;
+  pointer-events: none;
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.36s ease, visibility 0.36s ease;
 }
 
 .youtube-loading[hidden] { display: none; }
-.youtube-loading .loader-box { color: white; }
-.youtube-loading .default-spinner {
-  border-color: rgba(255, 255, 255, 0.22);
-  border-top-color: rgba(255, 255, 255, 0.95);
+.youtube-loading.fade-out {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.youtube-loader-box {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: min(280px, calc(100vw - 80px));
+  padding: 18px 22px;
+  display: grid;
+  place-items: center;
+  color: white;
+  text-align: center;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.36);
+  animation: youtubeLoadingBreath 2.69s ease-in-out infinite;
+}
+
+.youtube-loading.error .youtube-loader-box {
+  background: rgba(127, 29, 29, 0.52);
+}
+
+.youtube-loading-text {
+  font-size: calc(1rem + 5pt);
+  font-weight: 900;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+
+@keyframes youtubeLoadingBreath {
+  0%, 100% { opacity: 0.96; }
+  50% { opacity: 0.34; }
 }
 
 .mini-modal-card {
@@ -1137,6 +1174,7 @@ html.dark-mode .like-button.liking {
   .modal-song-info { padding: 12px 14px; }
   .modal-song-info-top { align-items: flex-start; gap: 10px; }
   .modal-song-title { font-size: calc(0.95rem + 8pt); }
+  .youtube-loading-text { font-size: calc(0.95rem + 5pt); }
   .modal-like-panel .like-counts { display: none; }
   .modal-like-panel .like-button {
     min-width: 82px;

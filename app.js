@@ -17,6 +17,8 @@
   let currentSettingsRows = [];
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
+  const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
+  const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
 
   const RECOMMEND_LIMITS = {
     random: 5,
@@ -101,6 +103,12 @@
   let coverAutoTimer = null;
   let likePostEnabled = true;
   let currentModalSongId = "";
+  let youtubePlayer = null;
+  let youtubePlayerToken = 0;
+  let youtubeApiReadyPromise = null;
+  let youtubeLoadingFadeTimer = null;
+  let youtubeLoadingStatusTimer = null;
+  let youtubeBufferingTimer = null;
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
@@ -1650,49 +1658,247 @@
   }
 
   function openYoutubeModal(url, meta = {}) {
-    const embedUrl = makeYoutubeEmbedUrl(url);
+    const videoId = extractYoutubeVideoId(url);
 
-    if (!embedUrl) {
+    if (!videoId) {
       window.open(url, "_blank", "noopener,noreferrer");
       return;
     }
 
+    const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
+    const token = ++youtubePlayerToken;
+
+    destroyYoutubePlayer_(false);
     currentModalSongId = meta.id || "";
     els.modalSongTitle.textContent = meta.title || "";
     els.modalSongArtist.textContent = meta.artist || "";
     els.modalSongFooter.textContent = [meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ ");
     updateModalLikePanel(currentModalSongId);
 
-    showYoutubeLoading();
-    els.youtubeFrameWrap.innerHTML = `
-      <iframe
-        src="${escapeHtml(embedUrl)}"
-        title="YouTube video player"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-        allowfullscreen></iframe>
-    `;
-
-    const iframe = els.youtubeFrameWrap.querySelector("iframe");
-    if (iframe) {
-      iframe.addEventListener("load", () => {
-        hideYoutubeLoading();
-      }, { once: true });
-    }
-
+    els.youtubeFrameWrap.innerHTML = `<div id="youtubePlayerMount" class="youtube-player-mount"></div>`;
     els.youtubeModal.hidden = false;
     document.body.classList.add("modal-open");
+    showYoutubeLoading();
+    scheduleYoutubeLoadingStatus_(token);
+
+    ensureYouTubeIframeApi_()
+      .then(() => {
+        if (!isCurrentYoutubeToken_(token)) return;
+        createYoutubePlayer_(videoId, startSeconds, token);
+      })
+      .catch(err => {
+        if (!isCurrentYoutubeToken_(token)) return;
+        console.error("[YouTube API 로딩 실패]", err);
+        showYoutubeLoadingMessage("YouTube 플레이어를 불러오지 못했습니다.", { error: true });
+      });
   }
 
   function closeYoutubeModal() {
+    youtubePlayerToken += 1;
     els.youtubeModal.hidden = true;
-    els.youtubeFrameWrap.innerHTML = "";
-    hideYoutubeLoading();
+    destroyYoutubePlayer_(true);
+    hideYoutubeLoading(true);
     els.modalSongTitle.textContent = "";
     els.modalSongArtist.textContent = "";
     els.modalSongFooter.textContent = "";
     currentModalSongId = "";
     if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
     document.body.classList.remove("modal-open");
+  }
+
+  function ensureYouTubeIframeApi_() {
+    if (window.YT && typeof window.YT.Player === "function") {
+      return Promise.resolve(window.YT);
+    }
+
+    if (youtubeApiReadyPromise) {
+      return youtubeApiReadyPromise;
+    }
+
+    youtubeApiReadyPromise = new Promise((resolve, reject) => {
+      const previousReady = window.onYouTubeIframeAPIReady;
+      const timeout = window.setTimeout(() => {
+        reject(new Error("YouTube IFrame API 로딩 시간이 초과되었습니다."));
+      }, 12000);
+
+      window.onYouTubeIframeAPIReady = () => {
+        window.clearTimeout(timeout);
+        if (typeof previousReady === "function") {
+          try { previousReady(); } catch (err) { console.warn("기존 YouTube API 콜백 실행 실패", err); }
+        }
+        resolve(window.YT);
+      };
+
+      const existingScript = document.querySelector(`script[src="${YOUTUBE_API_SRC}"]`);
+      if (existingScript) {
+        existingScript.addEventListener("error", () => {
+          window.clearTimeout(timeout);
+          reject(new Error("YouTube IFrame API 스크립트 로딩 실패"));
+        }, { once: true });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = YOUTUBE_API_SRC;
+      script.async = true;
+      script.onerror = () => {
+        window.clearTimeout(timeout);
+        reject(new Error("YouTube IFrame API 스크립트 로딩 실패"));
+      };
+      document.head.appendChild(script);
+    });
+
+    return youtubeApiReadyPromise;
+  }
+
+  function createYoutubePlayer_(videoId, startSeconds, token) {
+    const mount = document.getElementById("youtubePlayerMount");
+    if (!mount) return;
+
+    showYoutubeLoadingMessage(makeYoutubeLoadingText());
+
+    youtubePlayer = new YT.Player(mount, {
+      videoId,
+      width: "100%",
+      height: "100%",
+      playerVars: {
+        autoplay: 1,
+        playsinline: 1,
+        rel: 0,
+        vq: "hd1080",
+        hd: 1,
+        start: Math.max(0, Number(startSeconds) || 0),
+        origin: window.location.origin
+      },
+      events: {
+        onReady: event => {
+          if (!isCurrentYoutubeToken_(token)) return;
+          try {
+            event.target.playVideo();
+          } catch (err) {
+            console.warn("YouTube 자동 재생 요청 실패", err);
+            showYoutubeLoadingMessage("재생 버튼 입력을 기다리는 중...");
+          }
+        },
+        onStateChange: event => handleYoutubePlayerStateChange_(event, token),
+        onError: event => handleYoutubePlayerError_(event, token)
+      }
+    });
+  }
+
+  function handleYoutubePlayerStateChange_(event, token) {
+    if (!isCurrentYoutubeToken_(token) || !window.YT || !YT.PlayerState) return;
+
+    switch (event.data) {
+      case YT.PlayerState.PLAYING:
+        clearYoutubeLoadingStatusTimer_();
+        clearYoutubeBufferingTimer_();
+        hideYoutubeLoading(false, 180);
+        break;
+      case YT.PlayerState.BUFFERING:
+        scheduleYoutubeBufferingStatus_(token);
+        break;
+      case YT.PlayerState.CUED:
+        clearYoutubeBufferingTimer_();
+        break;
+      case YT.PlayerState.PAUSED:
+        clearYoutubeLoadingStatusTimer_();
+        clearYoutubeBufferingTimer_();
+        hideYoutubeLoading(false, 0);
+        break;
+      case YT.PlayerState.ENDED:
+        clearYoutubeLoadingStatusTimer_();
+        clearYoutubeBufferingTimer_();
+        hideYoutubeLoading(false, 180);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function handleYoutubePlayerError_(event, token) {
+    if (!isCurrentYoutubeToken_(token)) return;
+
+    const code = event && typeof event.data !== "undefined" ? event.data : "unknown";
+    console.warn("YouTube 플레이어 오류", { code });
+    showYoutubeLoadingMessage("영상 재생에 문제가 생겼습니다.", { error: true });
+  }
+
+  function destroyYoutubePlayer_(clearFrame = true) {
+    clearYoutubeLoadingTimers_();
+
+    if (youtubePlayer) {
+      try {
+        youtubePlayer.stopVideo && youtubePlayer.stopVideo();
+      } catch (err) {}
+
+      try {
+        youtubePlayer.destroy && youtubePlayer.destroy();
+      } catch (err) {
+        console.warn("YouTube 플레이어 정리 실패", err);
+      }
+
+      youtubePlayer = null;
+    }
+
+    if (clearFrame && els.youtubeFrameWrap) {
+      els.youtubeFrameWrap.innerHTML = "";
+    }
+  }
+
+  function isCurrentYoutubeToken_(token) {
+    return token === youtubePlayerToken && els.youtubeModal && !els.youtubeModal.hidden;
+  }
+
+  function scheduleYoutubeLoadingStatus_(token) {
+    clearYoutubeLoadingStatusTimer_();
+    youtubeLoadingStatusTimer = window.setTimeout(() => {
+      if (!isCurrentYoutubeToken_(token)) return;
+      showYoutubeLoadingMessage("영상 응답을 기다리는 중...");
+    }, 8000);
+  }
+
+  function scheduleYoutubeBufferingStatus_(token) {
+    clearYoutubeBufferingTimer_();
+    youtubeBufferingTimer = window.setTimeout(() => {
+      if (!isCurrentYoutubeToken_(token)) return;
+      showYoutubeLoadingMessage("영상을 버퍼링하는 중...");
+    }, 1500);
+  }
+
+  function clearYoutubeLoadingTimers_() {
+    clearYoutubeLoadingStatusTimer_();
+    clearYoutubeBufferingTimer_();
+    if (youtubeLoadingFadeTimer) {
+      window.clearTimeout(youtubeLoadingFadeTimer);
+      youtubeLoadingFadeTimer = null;
+    }
+  }
+
+  function clearYoutubeLoadingStatusTimer_() {
+    if (youtubeLoadingStatusTimer) {
+      window.clearTimeout(youtubeLoadingStatusTimer);
+      youtubeLoadingStatusTimer = null;
+    }
+  }
+
+  function clearYoutubeBufferingTimer_() {
+    if (youtubeBufferingTimer) {
+      window.clearTimeout(youtubeBufferingTimer);
+      youtubeBufferingTimer = null;
+    }
+  }
+
+  function getYoutubeStartSecondsFromRawUrl(url) {
+    const raw = normalizeYoutubeUrlForParse(String(url || "").trim());
+    if (!raw) return 0;
+
+    try {
+      const parsed = new URL(raw);
+      return getYoutubeStartSecondsFromUrl(raw, parsed);
+    } catch {
+      return 0;
+    }
   }
 
   function makeYoutubeEmbedUrl(url) {
@@ -2322,16 +2528,69 @@
     document.body.classList.remove("page-loading-open");
   }
 
-  function showYoutubeLoading() {
-    if (!els.youtubeLoading) return;
-    els.youtubeLoading.innerHTML = makeLoadingMarkup("영상을 불러오는 중...");
-    els.youtubeLoading.hidden = false;
+  function showYoutubeLoading(message = makeYoutubeLoadingText()) {
+    showYoutubeLoadingMessage(message);
   }
 
-  function hideYoutubeLoading() {
+  function showYoutubeLoadingMessage(message, options = {}) {
     if (!els.youtubeLoading) return;
-    els.youtubeLoading.hidden = true;
-    els.youtubeLoading.innerHTML = "";
+
+    if (youtubeLoadingFadeTimer) {
+      window.clearTimeout(youtubeLoadingFadeTimer);
+      youtubeLoadingFadeTimer = null;
+    }
+
+    els.youtubeLoading.hidden = false;
+    els.youtubeLoading.classList.remove("fade-out", "error");
+    if (options.error) els.youtubeLoading.classList.add("error");
+    els.youtubeLoading.innerHTML = makeYoutubeLoadingMarkup(message || makeYoutubeLoadingText());
+  }
+
+  function hideYoutubeLoading(immediate = false, delay = 0) {
+    if (!els.youtubeLoading) return;
+
+    if (youtubeLoadingFadeTimer) {
+      window.clearTimeout(youtubeLoadingFadeTimer);
+      youtubeLoadingFadeTimer = null;
+    }
+
+    const run = () => {
+      if (immediate) {
+        els.youtubeLoading.hidden = true;
+        els.youtubeLoading.innerHTML = "";
+        els.youtubeLoading.classList.remove("fade-out", "error");
+        return;
+      }
+
+      if (els.youtubeLoading.hidden) return;
+      els.youtubeLoading.classList.add("fade-out");
+
+      youtubeLoadingFadeTimer = window.setTimeout(() => {
+        els.youtubeLoading.hidden = true;
+        els.youtubeLoading.innerHTML = "";
+        els.youtubeLoading.classList.remove("fade-out", "error");
+        youtubeLoadingFadeTimer = null;
+      }, 360);
+    };
+
+    if (delay > 0) {
+      youtubeLoadingFadeTimer = window.setTimeout(run, delay);
+    } else {
+      run();
+    }
+  }
+
+  function makeYoutubeLoadingText() {
+    const word = YOUTUBE_LOADING_WORDS[Math.floor(Math.random() * YOUTUBE_LOADING_WORDS.length)] || "불러오는";
+    return `영상을 ${word} 중...`;
+  }
+
+  function makeYoutubeLoadingMarkup(text) {
+    return `
+      <div class="youtube-loader-box">
+        <div class="youtube-loading-text">${escapeHtml(text || makeYoutubeLoadingText())}</div>
+      </div>
+    `;
   }
 
   function makeLoadingMarkup(text) {
