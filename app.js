@@ -1305,8 +1305,8 @@
       return;
     }
 
-    button.disabled = true;
-    button.classList.add("liking");
+    const waitingTimer = startLikeWaitingFeedback(button);
+    showCooldownText("추천 요청 전달중...");
 
     try {
       const res = await fetch(API_URL, {
@@ -1364,9 +1364,45 @@
       console.error(`[❌] ${label} · 요청 예외`, err);
       showCooldownText("추천 요청 실패");
     } finally {
-      button.classList.remove("liking");
-      if (button.dataset.likeDisabled !== "maintenance") button.disabled = false;
+      stopLikeWaitingFeedback(button, waitingTimer);
     }
+  }
+
+  function startLikeWaitingFeedback(button) {
+    if (!button) return null;
+
+    const originalText = button.textContent || "♡ 좋아요";
+    let heartOn = false;
+
+    button.dataset.originalText = originalText;
+    button.classList.add("liking");
+    button.disabled = true;
+    button.textContent = "♡ 전달중";
+
+    const timer = window.setInterval(() => {
+      heartOn = !heartOn;
+      button.textContent = heartOn ? "♥ 전달중" : "♡ 전달중";
+    }, 420);
+
+    return timer;
+  }
+
+  function stopLikeWaitingFeedback(button, timer) {
+    if (timer) {
+      window.clearInterval(timer);
+    }
+
+    if (!button) return;
+
+    button.classList.remove("liking");
+
+    if (button.dataset.likeDisabled !== "maintenance") {
+      button.disabled = false;
+    }
+
+    const originalText = button.dataset.originalText || "♡ 좋아요";
+    button.textContent = originalText;
+    delete button.dataset.originalText;
   }
 
   function addLikeClickFeedback(button) {

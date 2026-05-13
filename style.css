@@ -467,8 +467,18 @@ button:disabled {
 
 .like-button.liking {
   position: relative;
-  opacity: 0.82;
-  animation: likeWaiting 0.85s ease-in-out infinite;
+  opacity: 1;
+  cursor: progress;
+  pointer-events: none;
+  border-color: #813a48;
+  background: var(--accent-soft);
+  color: var(--accent);
+  animation: likeWaitingPulse 1.63s ease-in-out infinite;
+}
+
+html.dark-mode .like-button.liking {
+  border-color: #813a48;
+  animation: likeWaitingPulseDark 1.63s ease-in-out infinite;
 }
 
 .like-counts {
@@ -486,9 +496,28 @@ button:disabled {
   100% { transform: scale(1); }
 }
 
-@keyframes likeWaiting {
-  0%, 100% { filter: brightness(1); }
-  50% { filter: brightness(1.12); }
+@keyframes likeWaitingPulse {
+  0%, 100% {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  50% {
+    background: #813a48;
+    color: #fff;
+  }
+}
+
+@keyframes likeWaitingPulseDark {
+  0%, 100% {
+    background: var(--accent-soft);
+    color: #ff9bad;
+  }
+
+  50% {
+    background: #813a48;
+    color: #fff;
+  }
 }
 
 .load-more-wrap {
