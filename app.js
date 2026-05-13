@@ -28,6 +28,8 @@
   };
   const RECOMMEND_MORE_STEP = 10;
   const DATE_INITIAL_COUNT = 10;
+  const DATE_RECOMMEND_INITIAL_GROUPS = 5;
+  const DATE_RECOMMEND_MORE_STEP = 5;
 
   const els = {
     dataStatus: document.getElementById("dataStatus"),
@@ -187,7 +189,7 @@
     document.querySelectorAll("[data-date-sort]").forEach(button => {
       button.addEventListener("click", () => {
         dateSortMode = button.dataset.dateSort || "desc";
-        dateVisibleDateCount = 1;
+        dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
         document.querySelectorAll("[data-date-sort]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
         renderDateSection();
@@ -216,7 +218,7 @@
     });
 
     els.dateMoreButton.addEventListener("click", () => {
-      dateVisibleDateCount += 1;
+      dateVisibleDateCount += getDateMoreStep(dateSortMode);
       renderDateSection();
     });
 
@@ -780,7 +782,7 @@
   function applyAndRender(resetVisible) {
     if (resetVisible) {
       recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
-      dateVisibleDateCount = 1;
+      dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
       if (recommendMode === "random") randomPoolIds = [];
     }
 
@@ -898,8 +900,8 @@
   }
 
   function renderDateSection() {
-    const groups = groupByDate([...filteredSongs].sort(dateSortMode === "asc" ? compareDateAsc : compareDateDesc));
-    els.dateDescription.textContent = dateSortMode === "asc" ? "가장 오래된 날짜부터 표시합니다." : "가장 최신 날짜부터 표시합니다.";
+    const groups = getDateGroupsBySortMode(filteredSongs);
+    els.dateDescription.textContent = getDateDescription(groups.length);
     const visibleGroups = groups.slice(0, dateVisibleDateCount);
 
     if (!visibleGroups.length) {
@@ -908,25 +910,31 @@
       return;
     }
 
-    let renderedCount = visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
+    if (dateSortMode !== "likes_total") {
+      let renderedCount = visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
 
-    if (renderedCount < DATE_INITIAL_COUNT && dateVisibleDateCount < groups.length) {
-      while (renderedCount < DATE_INITIAL_COUNT && dateVisibleDateCount < groups.length) {
-        dateVisibleDateCount += 1;
-        const group = groups[dateVisibleDateCount - 1];
-        renderedCount += group.items.length;
+      if (renderedCount < DATE_INITIAL_COUNT && dateVisibleDateCount < groups.length) {
+        while (renderedCount < DATE_INITIAL_COUNT && dateVisibleDateCount < groups.length) {
+          dateVisibleDateCount += 1;
+          const group = groups[dateVisibleDateCount - 1];
+          renderedCount += group.items.length;
+        }
       }
     }
 
     const finalGroups = groups.slice(0, dateVisibleDateCount);
     els.dateList.innerHTML = finalGroups.map(group => {
       const key = group.key;
-      const collapsed = isGroupCollapsed("date", key);
+      const collapsed = isGroupCollapsed("date", key, dateSortMode === "likes_total");
+      const countText = dateSortMode === "likes_total"
+        ? `${group.items.length}개 · 추천 ${group.likesTotal}`
+        : `${group.items.length}개`;
+      
       return `
         <section class="date-group">
           <button class="date-group-title ${collapsed ? "collapsed" : ""}" type="button" data-date-group-toggle="${escapeHtml(key)}">
             <span>${escapeHtml(group.label)}</span>
-            <span class="date-group-count">${group.items.length}개</span>
+            <span class="date-group-count">${escapeHtml(countText)}</span>
           </button>
           <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${group.items.map(renderSongCard).join("")}</div>
         </section>
@@ -938,6 +946,42 @@
     bindFilterButtons(els.dateList);
     bindDateGroupToggles(els.dateList, "date");
     els.dateMoreButton.hidden = dateVisibleDateCount >= groups.length;
+    els.dateMoreButton.textContent = dateSortMode === "likes_total" ? "더 보기" : "더 보기";
+  }
+  
+  function getDateGroupsBySortMode(songs) {
+    const sortedSongs = [...songs].sort(dateSortMode === "asc" ? compareDateAsc : compareDateDesc);
+    const groups = groupByDate(sortedSongs);
+
+    if (dateSortMode !== "likes_total") {
+      return groups;
+    }
+    
+    groups.forEach(group => {
+      group.items.sort(compareDateSongLikesDesc);
+    });
+
+    return groups.sort(compareDateGroupLikesDesc);
+  }
+
+  function getDateDescription(groupCount) {
+    if (dateSortMode === "asc") {
+      return "가장 오래된 방송부터 표시합니다.";
+    }
+
+    if (dateSortMode === "likes_total") {
+      return `가장 추천을 받은 방송부터 표시합니다.`;
+    }
+
+    return "가장 최신 방송부터 표시합니다.";
+  }
+  
+  function getDateInitialVisibleCount(mode = dateSortMode) {
+    return mode === "likes_total" ? DATE_RECOMMEND_INITIAL_GROUPS : 1;
+  }
+
+  function getDateMoreStep(mode = dateSortMode) {
+    return mode === "likes_total" ? DATE_RECOMMEND_MORE_STEP : 1;
   }
 
   function renderSungSection() {
@@ -1450,6 +1494,16 @@
   function compareDateAsc(a, b) {
     return dateValue(a) - dateValue(b) || String(a.id).localeCompare(String(b.id));
   }
+  
+  function compareDateGroupLikesDesc(a, b) {
+    return b.likesTotal - a.likesTotal || b.dateValue - a.dateValue || String(b.key).localeCompare(String(a.key));
+  }
+  
+  function compareDateSongLikesDesc(a, b) {
+    const byLikes = toNumber(b.likes_total) - toNumber(a.likes_total);
+    if (byLikes) return byLikes;
+    return compareDateDesc(a, b);
+  }
 
   function dateValue(item) {
     return Number(`${item.year || 0}${pad2(item.month) || "00"}${pad2(item.day) || "00"}`);
@@ -1464,10 +1518,14 @@
         map.set(key, {
           key,
           label: formatSongDate(song),
+          dateValue: dateValue(song),
+          likesTotal: 0,
           items: []
         });
       }
-      map.get(key).items.push(song);
+      const group = map.get(key);
+      group.items.push(song);
+      group.likesTotal += toNumber(song.likes_total);
     });
     return [...map.values()];
   }
