@@ -357,7 +357,8 @@
       if (!word) return;
 
       const aliases = parseAliasesCell(row.aliases);
-      result[word] = aliases;
+      const exact = normalizeBoolean(row.exact ?? row.exact_match ?? row.unanimous ?? row.perfect);
+      result[word] = { aliases, exact };
     });
 
     return result;
@@ -369,12 +370,31 @@
     Object.entries(obj || {}).forEach(([word, aliases]) => {
       const key = String(word || "").trim();
       if (!key) return;
-      result[key] = Array.isArray(aliases)
-        ? aliases.map(v => String(v || "").trim()).filter(Boolean)
-        : parseAliasesCell(aliases);
+
+      if (aliases && typeof aliases === "object" && !Array.isArray(aliases)) {
+        result[key] = {
+          aliases: Array.isArray(aliases.aliases)
+            ? aliases.aliases.map(v => String(v || "").trim()).filter(Boolean)
+            : parseAliasesCell(aliases.aliases),
+          exact: normalizeBoolean(aliases.exact ?? aliases.exact_match ?? aliases.unanimous ?? aliases.perfect)
+        };
+        return;
+      }
+
+      result[key] = {
+        aliases: Array.isArray(aliases)
+          ? aliases.map(v => String(v || "").trim()).filter(Boolean)
+          : parseAliasesCell(aliases),
+        exact: false
+      };
     });
 
     return result;
+  }
+
+  function normalizeBoolean(value) {
+    const text = String(value ?? "").trim().toLowerCase();
+    return ["true", "1", "yes", "y", "on", "o", "ok", "예", "네", "참", "TRUE".toLowerCase()].includes(text);
   }
 
   function parseAliasesCell(value) {
@@ -801,7 +821,7 @@
     }
 
     const keyword = normalizeSearchText(els.searchInput.value);
-    const keywordTerms = expandSearchTerms(keyword);
+    const searchQuery = buildSearchQuery(keyword);
     const searchMode = els.searchMode ? els.searchMode.value : "all";
     const years = getFilterValues(els.yearFilter).map(Number);
     const months = getFilterValues(els.monthFilter).map(Number);
@@ -816,9 +836,8 @@
       if (categories.length && !hasAnyMultiValue(getCategoryValues(song), categories)) return false;
       if (countries.length && !hasAnyMultiValue(getCountryValues(song), countries)) return false;
 
-      if (keywordTerms.length) {
-        const haystack = getSearchHaystack(song, searchMode);
-        if (!keywordTerms.some(term => haystack.includes(term))) return false;
+      if (hasSearchQuery(searchQuery)) {
+        if (!matchesSearchQuery(song, searchMode, searchQuery)) return false;
       }
 
       return true;
@@ -2032,25 +2051,18 @@
 
 
 
-  function getSearchHaystack(song, mode) {
+  function getSearchFieldValues(song, mode) {
     const titleValues = [getDisplayTitle(song), ...getTitleValues(song)];
     const artistValues = [getDisplayArtist(song), ...getArtistValues(song)];
     const categoryValues = getCategoryValues(song);
     const countryValues = getCountryValues(song);
+    const dateValues = [formatPlainDate(song), formatSongDate(song), `${song.year}-${song.month}-${song.day}`];
 
-    if (mode === "title") {
-      return normalizeSearchText(titleValues.join(" "));
-    }
+    if (mode === "title") return titleValues;
+    if (mode === "artist") return artistValues;
+    if (mode === "date") return dateValues;
 
-    if (mode === "artist") {
-      return normalizeSearchText(artistValues.join(" "));
-    }
-
-    if (mode === "date") {
-      return normalizeSearchText([formatPlainDate(song), formatSongDate(song), `${song.year}-${song.month}-${song.day}`].join(" "));
-    }
-
-    return normalizeSearchText([
+    return [
       ...titleValues,
       ...artistValues,
       ...categoryValues,
@@ -2058,10 +2070,22 @@
       song.id,
       song.day_p,
       song.timeline,
-      formatPlainDate(song),
-      formatSongDate(song),
-      `${song.year}-${song.month}-${song.day}`
-    ].join(" "));
+      ...dateValues
+    ];
+  }
+
+  function getSearchHaystack(song, mode) {
+    return normalizeSearchText(getSearchFieldValues(song, mode).join(" "));
+  }
+
+  function matchesSearchQuery(song, mode, query) {
+    if (query.exactTerms.length) {
+      const exactValues = new Set(getSearchFieldValues(song, mode).map(normalizeSearchText).filter(Boolean));
+      return query.exactTerms.some(term => exactValues.has(term));
+    }
+
+    const haystack = getSearchHaystack(song, mode);
+    return query.terms.some(term => haystack.includes(term));
   }
 
   function refreshDayFilterOptions() {
@@ -2799,29 +2823,51 @@
       .trim();
   }
 
-  function expandSearchTerms(keyword) {
-    if (!keyword) return [];
+  function buildSearchQuery(keyword) {
+    if (!keyword) return { terms: [], exactTerms: [] };
 
     const terms = new Set([keyword]);
+    const exactTerms = new Set();
 
-    Object.entries(searchAliases).forEach(([base, aliases]) => {
+    Object.entries(searchAliases).forEach(([base, entry]) => {
       const normalizedBase = normalizeSearchText(base);
-      const normalizedAliases = [base, ...(Array.isArray(aliases) ? aliases : [])]
+      const aliasList = normalizeSearchAliasList(entry);
+      const normalizedAliases = [base, ...aliasList]
         .map(normalizeSearchText)
         .filter(Boolean);
 
-      const matched =
-        normalizedBase.includes(keyword) ||
-        keyword.includes(normalizedBase);
+      const matched = normalizedAliases.some(term => term.includes(keyword) || keyword.includes(term));
 
       if (matched) {
         normalizedAliases.forEach(term => {
           if (term) terms.add(term);
+          if (isExactSearchAlias(entry) && term) exactTerms.add(term);
         });
       }
     });
 
-    return [...terms];
+    return {
+      terms: [...terms],
+      exactTerms: [...exactTerms]
+    };
+  }
+
+  function hasSearchQuery(query) {
+    return Boolean(query && (query.terms.length || query.exactTerms.length));
+  }
+
+  function normalizeSearchAliasList(entry) {
+    if (Array.isArray(entry)) return entry;
+    if (entry && typeof entry === "object") return Array.isArray(entry.aliases) ? entry.aliases : [];
+    return [];
+  }
+
+  function isExactSearchAlias(entry) {
+    return Boolean(entry && typeof entry === "object" && entry.exact);
+  }
+
+  function expandSearchTerms(keyword) {
+    return buildSearchQuery(keyword).terms;
   }
 
   function uniqueSorted(values, numericDesc = false, numericAsc = false) {
