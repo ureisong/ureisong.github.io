@@ -32,6 +32,8 @@
   const DATE_INITIAL_COUNT = 10;
   const DATE_RECOMMEND_INITIAL_GROUPS = 5;
   const DATE_RECOMMEND_MORE_STEP = 5;
+  const SUNG_INITIAL_GROUP_COUNT = 50;
+  const SUNG_MORE_STEP = 50;
 
   const els = {
     dataStatus: document.getElementById("dataStatus"),
@@ -96,6 +98,7 @@
   let dateVisibleDateCount = 1;
   let dateSortMode = "desc";
   let sungMode = "song";
+  let sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
   let coverItems = [];
   let coverIndex = 0;
   let coverMoving = false;
@@ -109,6 +112,7 @@
   let youtubeLoadingFadeTimer = null;
   let youtubeLoadingStatusTimer = null;
   let youtubeBufferingTimer = null;
+  let currentYoutubeLoadingText = "";
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
@@ -233,6 +237,7 @@
     document.querySelectorAll("[data-sung-mode]").forEach(button => {
       button.addEventListener("click", () => {
         sungMode = button.dataset.sungMode || "song";
+        sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
         document.querySelectorAll("[data-sung-mode]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
         renderSungSection();
@@ -791,6 +796,7 @@
     if (resetVisible) {
       recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
       dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
+      sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
       if (recommendMode === "random") randomPoolIds = [];
     }
 
@@ -996,16 +1002,19 @@
     if (!els.sungList) return;
 
     const groups = groupBySung(filteredSongs, sungMode);
+    const visibleGroups = groups.slice(0, sungVisibleGroupCount);
+    const hasMore = sungVisibleGroupCount < groups.length;
+
     els.sungDescription.textContent = sungMode === "artist"
-      ? `아티스트 기준 ${groups.length}개 그룹을 표시합니다.`
-      : `곡＋아티스트 기준 ${groups.length}개 그룹을 표시합니다.`;
+      ? `아티스트 기준 ${groups.length}개 그룹 중 ${visibleGroups.length}개를 표시합니다.`
+      : `곡＋아티스트 기준 ${groups.length}개 그룹 중 ${visibleGroups.length}개를 표시합니다.`;
 
     if (!groups.length) {
       els.sungList.innerHTML = `<div class="empty">부른순에 표시할 항목이 없습니다.</div>`;
       return;
     }
 
-    els.sungList.innerHTML = groups.map(group => {
+    const groupHtml = visibleGroups.map(group => {
       const key = group.key;
       const collapsed = isGroupCollapsed("sung", key, true);
       return `
@@ -1019,10 +1028,30 @@
       `;
     }).join("");
 
+    els.sungList.innerHTML = `
+      ${groupHtml}
+      ${hasMore ? `
+        <div class="load-more-wrap sung-more-wrap">
+          <button id="sungMoreButton" type="button">더 보기</button>
+        </div>
+      ` : ""}
+    `;
+
     bindLikeButtons(els.sungList);
     bindYoutubeButtons(els.sungList);
     bindFilterButtons(els.sungList);
     bindDateGroupToggles(els.sungList, "sung");
+    bindSungMoreButton();
+  }
+
+  function bindSungMoreButton() {
+    const button = document.getElementById("sungMoreButton");
+    if (!button) return;
+
+    button.addEventListener("click", () => {
+      sungVisibleGroupCount += SUNG_MORE_STEP;
+      renderSungSection();
+    });
   }
 
   function groupBySung(songs, mode) {
@@ -1755,7 +1784,7 @@
     const mount = document.getElementById("youtubePlayerMount");
     if (!mount) return;
 
-    showYoutubeLoadingMessage(makeYoutubeLoadingText());
+    showYoutubeLoadingMessage(getCurrentYoutubeLoadingText_(), { preserveInitial: true });
 
     youtubePlayer = new YT.Player(mount, {
       videoId,
@@ -2528,8 +2557,12 @@
     document.body.classList.remove("page-loading-open");
   }
 
-  function showYoutubeLoading(message = makeYoutubeLoadingText()) {
-    showYoutubeLoadingMessage(message);
+  function showYoutubeLoading(message = "") {
+    if (!currentYoutubeLoadingText) {
+      currentYoutubeLoadingText = message || makeYoutubeLoadingText();
+    }
+
+    showYoutubeLoadingMessage(currentYoutubeLoadingText, { preserveInitial: true });
   }
 
   function showYoutubeLoadingMessage(message, options = {}) {
@@ -2540,10 +2573,14 @@
       youtubeLoadingFadeTimer = null;
     }
 
+    const text = options.preserveInitial
+      ? getCurrentYoutubeLoadingText_()
+      : String(message || getCurrentYoutubeLoadingText_());
+
     els.youtubeLoading.hidden = false;
     els.youtubeLoading.classList.remove("fade-out", "error");
     if (options.error) els.youtubeLoading.classList.add("error");
-    els.youtubeLoading.innerHTML = makeYoutubeLoadingMarkup(message || makeYoutubeLoadingText());
+    els.youtubeLoading.innerHTML = makeYoutubeLoadingMarkup(text);
   }
 
   function hideYoutubeLoading(immediate = false, delay = 0) {
@@ -2559,6 +2596,7 @@
         els.youtubeLoading.hidden = true;
         els.youtubeLoading.innerHTML = "";
         els.youtubeLoading.classList.remove("fade-out", "error");
+        currentYoutubeLoadingText = "";
         return;
       }
 
@@ -2569,6 +2607,7 @@
         els.youtubeLoading.hidden = true;
         els.youtubeLoading.innerHTML = "";
         els.youtubeLoading.classList.remove("fade-out", "error");
+        currentYoutubeLoadingText = "";
         youtubeLoadingFadeTimer = null;
       }, 360);
     };
@@ -2583,6 +2622,13 @@
   function makeYoutubeLoadingText() {
     const word = YOUTUBE_LOADING_WORDS[Math.floor(Math.random() * YOUTUBE_LOADING_WORDS.length)] || "불러오는";
     return `영상을 ${word} 중...`;
+  }
+
+  function getCurrentYoutubeLoadingText_() {
+    if (!currentYoutubeLoadingText) {
+      currentYoutubeLoadingText = makeYoutubeLoadingText();
+    }
+    return currentYoutubeLoadingText;
   }
 
   function makeYoutubeLoadingMarkup(text) {

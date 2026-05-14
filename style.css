@@ -888,7 +888,7 @@ html.dark-mode .like-button.liking {
   text-align: center;
   border-radius: 18px;
   background: rgba(15, 23, 42, 0.36);
-  animation: youtubeLoadingBreath 2.69s ease-in-out infinite;
+  animation: LoadingBreath 2.69s ease-in-out infinite;
 }
 
 .youtube-loading.error .youtube-loader-box {
@@ -902,7 +902,7 @@ html.dark-mode .like-button.liking {
   letter-spacing: -0.01em;
 }
 
-@keyframes youtubeLoadingBreath {
+@keyframes LoadingBreath {
   0%, 100% { opacity: 0.96; }
   50% { opacity: 0.34; }
 }
@@ -940,14 +940,22 @@ html.dark-mode .like-button.liking {
 .page-loading[hidden] { display: none; }
 
 .page-loading-card {
-  width: min(360px, calc(100vw - 40px));
-  min-height: 180px;
-  padding: 28px;
+  width: min(380px, calc(100vw - 40px));
+  min-height: 188px;
+  padding: clamp(24px, 4vw, 34px);
   display: grid;
   place-items: center;
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
   border-radius: 24px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.25);
+}
+
+html.dark-mode .page-loading-card {
+  background: rgba(23, 26, 34, 0.96);
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
 }
 
 .loader-box {
@@ -955,7 +963,7 @@ html.dark-mode .like-button.liking {
   display: grid;
   justify-items: center;
   gap: 14px;
-  color: #1f2937;
+  color: inherit;
   font-weight: 800;
 }
 
@@ -977,17 +985,31 @@ html.dark-mode .like-button.liking {
 
 .use-default-loader .default-spinner { display: block; }
 
+html.dark-mode .default-spinner {
+  border-color: rgba(232, 237, 247, 0.18);
+  border-top-color: rgba(232, 237, 247, 0.9);
+}
+
 .loader-text {
-  font-size: 15px;
+  font-size: clamp(24px, 4.2vw, 36px);
   text-align: center;
-  line-height: 1.5;
+  line-height: 1.25;
+  font-weight: 950;
+  letter-spacing: 0.06em;
+}
+
+.page-loading .loader-text {
+  animation: LoadingBreath 2.69s ease-in-out infinite;
 }
 
 .loader-subtext {
   margin-top: 8px;
-  font-size: 13px;
-  opacity: 0.8;
+  font-size: clamp(13px, 2.2vw, 17px);
+  color: var(--muted);
+  opacity: 0.92;
   text-align: center;
+  line-height: 1.45;
+  font-weight: 750;
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1115,6 +1137,12 @@ html.dark-mode .like-button.liking {
 }
 
 @media (max-width: 560px) {
+  .page-loading-card { width: min(340px, calc(100vw - 34px)); min-height: 164px; }
+  .page-loading .loader-image { width: 58px; height: 58px; }
+  .page-loading .default-spinner { width: 44px; height: 44px; border-width: 5px; }
+  .page-loading .loader-text { font-size: clamp(22px, 7.4vw, 30px); }
+  .page-loading .loader-subtext { font-size: clamp(12px, 3.7vw, 15px); }
+
   .site-header { padding: 22px 12px 12px; }
   .layout { padding: 0 12px 28px; }
   .filter-grid { grid-template-columns: 1fr; }
