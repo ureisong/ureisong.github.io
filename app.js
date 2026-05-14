@@ -3,6 +3,7 @@
 
   const CONFIG = window.APP_CONFIG || {};
   const API_URL = CONFIG.API_URL || "";
+  const COUNTER = String(CONFIG.COUNTER || "").trim();
   const DATA_URL = CONFIG.DATA_URL || "./data.json";
   const SONGS_CSV_URL = CONFIG.SONGS_CSV_URL || "";
   const LIKES_SMR_CSV_URL = CONFIG.LIKES_SMR_CSV_URL || "";
@@ -117,6 +118,8 @@
   const collapsedGroups = new Set();
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
   let currentFooterText = FOOTER_TEXT;
+  let currentDataStatusText = "데이터 로딩 중...";
+  let visitorCount = "…";
 
   document.addEventListener("DOMContentLoaded", init);
 
@@ -127,6 +130,8 @@
     showPageLoading("...LOADING...", "공지사항 읽는 중..");
     renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
     renderFooter();
+    setupCounterTracking();
+    loadVisitorCount();
     showPageLoading("...LOADING...", "필터 만드는 중...");
     updateFilterSummaryHelp();
     startCooldownTimer();
@@ -2889,7 +2894,55 @@
   }
 
   function setStatus(text) {
-    els.dataStatus.textContent = text;
+    currentDataStatusText = String(text || "");
+    renderDataStatus();
+  }
+
+  function renderDataStatus() {
+    if (!els.dataStatus) return;
+    els.dataStatus.textContent = formatDataStatusText(currentDataStatusText);
+  }
+
+  function formatDataStatusText(text) {
+    const source = String(text || "");
+    const match = source.match(/^(\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s*·\s*(\d+)(?:개)?(.*)$/);
+    if (!match) return source;
+
+    const [, dateText, songCount, suffix = ""] = match;
+    return `${dateText} · ${songCount} · ${visitorCount}${suffix}`;
+  }
+
+  function setupCounterTracking() {
+    if (!COUNTER || document.querySelector("script[data-site-counter-script]")) return;
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = "https://gc.zgo.at/count.js";
+    script.dataset.goatcounter = `https://${COUNTER}.goatcounter.com/count`;
+    script.dataset.siteCounterScript = "1";
+    document.head.appendChild(script);
+  }
+
+  async function loadVisitorCount() {
+    if (!COUNTER) {
+      visitorCount = "…";
+      renderDataStatus();
+      return;
+    }
+
+    try {
+      const res = await fetch(`https://${COUNTER}.goatcounter.com/counter/TOTAL.json`, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const count = Number(data.count || 0);
+      visitorCount = Number.isFinite(count) ? String(count) : "…";
+      renderDataStatus();
+    } catch (err) {
+      console.warn("[방문자 수 로딩 실패]", err);
+      visitorCount = "…";
+      renderDataStatus();
+    }
   }
 
   function escapeTextOnly_(value) {

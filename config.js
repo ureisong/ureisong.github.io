@@ -8,5 +8,6 @@ window.APP_CONFIG = {
   SEARCH_ALIASES_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vTznVKN0u7Eei7Dz4wvlDYaHd_PR-a-2taqdzO1nP5TMLrWTccvjXPLgUKeArHuVl00SlJNsqV36p0n/pub?gid=1311743505&single=true&output=csv",
   LIKE_COOLDOWN_MS: 60 * 1000,
   NOTICE_TEXT: "",
-  FOOTER_TEXT: ""
+  FOOTER_TEXT: "",
+  COUNTER: "kimotaku"
 };
