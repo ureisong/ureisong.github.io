@@ -506,7 +506,7 @@
           renderCoverSection();
           buildFilters(allSongs);
           applyAndRender(true);
-          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}곡`);
+          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
         }
       }
 
@@ -534,7 +534,7 @@
 
       buildFilters(allSongs);
       applyAndRender(true);
-      setStatus(`${formatStatusDate(new Date())} · ${allSongs.length}곡`);
+      setStatus(`${formatStatusDate(new Date())} · ${allSongs.length}`);
     } catch (err) {
       console.error("[데이터 로딩 실패]", err);
       const cached = readLocalJsonCache();
@@ -550,7 +550,7 @@
         renderCoverSection();
         buildFilters(allSongs);
         applyAndRender(true);
-        setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}곡 · 캐시 사용`);
+        setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length} · ⓒ`);
       } else {
         allSongs = [];
         filteredSongs = [];
@@ -2900,16 +2900,17 @@
 
   function renderDataStatus() {
     if (!els.dataStatus) return;
-    els.dataStatus.textContent = formatDataStatusText(currentDataStatusText);
+    els.dataStatus.innerHTML = formatDataStatusText(currentDataStatusText);
+    //els.dataStatus.textContent = formatDataStatusText(currentDataStatusText);
   }
 
   function formatDataStatusText(text) {
     const source = String(text || "");
-    const match = source.match(/^(\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s*·\s*(\d+)(?:개)?(.*)$/);
+    const match = source.match(/^(\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s*·\s*(\d+)(?:곡)?(.*)$/);
     if (!match) return source;
 
     const [, dateText, songCount, suffix = ""] = match;
-    return `${dateText} · ${songCount} · ${visitorCount}${suffix}`;
+    return `${dateText} · <span title="${visitorCount}">${songCount}</span>`;	//return `${dateText} · ${songCount} · ${visitorCount}${suffix}`;
   }
 
   function setupCounterTracking() {
