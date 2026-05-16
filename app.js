@@ -506,7 +506,7 @@
           renderCoverSection();
           buildFilters(allSongs);
           applyAndRender(true);
-          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}개`);
+          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}곡`);
         }
       }
 
@@ -534,7 +534,7 @@
 
       buildFilters(allSongs);
       applyAndRender(true);
-      setStatus(`${formatStatusDate(new Date())} · ${allSongs.length}개`);
+      setStatus(`${formatStatusDate(new Date())} · ${allSongs.length}곡`);
     } catch (err) {
       console.error("[데이터 로딩 실패]", err);
       const cached = readLocalJsonCache();
@@ -550,7 +550,7 @@
         renderCoverSection();
         buildFilters(allSongs);
         applyAndRender(true);
-        setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}개 · 캐시 사용`);
+        setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}곡 · 캐시 사용`);
       } else {
         allSongs = [];
         filteredSongs = [];
@@ -927,12 +927,12 @@
 
   function getRecommendDescription(count) {
     const labels = {
-      random: `무작위 추천 ${count}개를 표시합니다.`,
-      likes_last_1d: `최근 1일 추천순 ${count}개를 표시합니다.`,
-      likes_last_7d: `최근 7일 추천순 ${count}개를 표시합니다.`,
-      likes_last_30d: `최근 30일 추천순 ${count}개를 표시합니다.`,
-      likes_total: `전체 추천순 ${count}개를 표시합니다.`,
-      my_liked: `내가 추천한 곡들을 전체 추천수순으로 ${count}개 표시합니다.`
+      random: `무작위 추천 ${count}곡을 표시합니다.`,
+      likes_last_1d: `최근 1일 추천순 ${count}곡을 표시합니다.`,
+      likes_last_7d: `최근 7일 추천순 ${count}곡을 표시합니다.`,
+      likes_last_30d: `최근 30일 추천순 ${count}곡을 표시합니다.`,
+      likes_total: `전체 추천순 ${count}곡을 표시합니다.`,
+      my_liked: `내가 추천한 곡들을 전체 추천순으로 ${count}곡을 표시합니다.`
     };
     return labels[recommendMode] || "추천순으로 표시합니다.";
   }
@@ -965,8 +965,8 @@
       const key = group.key;
       const collapsed = isGroupCollapsed("date", key, dateSortMode === "likes_total");
       const countText = dateSortMode === "likes_total"
-        ? `${group.items.length}개 · 추천 ${group.likesTotal}`
-        : `${group.items.length}개`;
+        ? `${group.items.length}곡 · 추천 ${group.likesTotal}`
+        : `${group.items.length}곡`;
       
       return `
         <section class="date-group">
@@ -1004,14 +1004,14 @@
 
   function getDateDescription(groupCount) {
     if (dateSortMode === "asc") {
-      return "가장 오래된 방송부터 표시합니다.";
+      return "가장 과거 날짜부터 표시합니다.";
     }
 
     if (dateSortMode === "likes_total") {
-      return `가장 추천을 받은 방송부터 표시합니다.`;
+      return `가장 추천받은 날짜부터 표시합니다.`;
     }
 
-    return "가장 최신 방송부터 표시합니다.";
+    return "가장 최신 날짜부터 표시합니다.";
   }
   
   function getDateInitialVisibleCount(mode = dateSortMode) {
@@ -1030,8 +1030,8 @@
     const hasMore = sungVisibleGroupCount < groups.length;
 
     els.sungDescription.textContent = sungMode === "artist"
-      ? `아티스트 기준 ${groups.length}개 그룹 중 ${visibleGroups.length}개를 표시합니다.`
-      : `곡＋아티스트 기준 ${groups.length}개 그룹 중 ${visibleGroups.length}개를 표시합니다.`;
+      ? `아티스트 기준 ${groups.length}개 그룹 중, ${visibleGroups.length}개를 표시합니다.`
+      : `곡 기준 ${groups.length}개 그룹 중, ${visibleGroups.length}개를 표시합니다.`;
 
     if (!groups.length) {
       els.sungList.innerHTML = `<div class="empty">부른순에 표시할 항목이 없습니다.</div>`;
@@ -2308,7 +2308,7 @@
 
     const count = coverItems.length;
     if (els.coverDescription) {
-      els.coverDescription.textContent = count ? `커버곡 ${count}개를 표시합니다.` : "표시할 커버곡이 없습니다.";
+      els.coverDescription.textContent = count ? `커버곡 ${count}곡을 표시합니다.` : "표시할 커버곡이 없습니다.";
     }
 
     if (!count) {
