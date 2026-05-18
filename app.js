@@ -188,7 +188,6 @@
     });
     els.searchInput.addEventListener("blur", () => els.searchInput.classList.remove("input-active"));
     els.searchInput.addEventListener("focus", () => {
-      collapseCoverSection();
       els.searchInput.classList.add("input-active");
     });
     window.addEventListener("scroll", deactivateSearchIfFilterOutOfView, { passive: true });
@@ -359,8 +358,9 @@
       if (key === "Escape") {
         if (!els.youtubeModal.hidden) closeYoutubeModal();
         resetFilters();
-        if (els.filterDetails) els.filterDetails.open = false;
+        applyEscResultPanelState();
         applyAndRender(true);
+        scrollToPageTop();
         return;
       }
 
@@ -875,12 +875,14 @@
     refreshDayFilterOptions();
   }
 
-  function applyAndRender(resetVisible) {
+  function applyAndRender(resetVisible, options = {}) {
+    const shouldUpdatePanelState = options.updatePanelState === true;
+
     if (resetVisible) {
       recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
       dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
       sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
-      applyFilterResultPanelState();
+      if (shouldUpdatePanelState) applyFilterResultPanelState();
       if (recommendMode === "random") randomPoolIds = [];
     }
 
@@ -1380,7 +1382,7 @@
   }
 
   function collapseNonDateSections() {
-    if (els.coverDetails) els.coverDetails.open = true;
+    if (els.coverDetails) els.coverDetails.open = false;
     if (els.recommendDetails) els.recommendDetails.open = false;
     if (els.sungDetails) els.sungDetails.open = false;
     if (els.recDetails) els.recDetails.open = false;
@@ -1389,6 +1391,35 @@
 
   function applyFilterResultPanelState() {
     collapseNonDateSections();
+  }
+
+  function applyEscResultPanelState() {
+    recommendMode = "random";
+    recommendVisibleCount = RECOMMEND_LIMITS.random;
+    randomPoolIds = [];
+    dateSortMode = "desc";
+    dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
+    sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+    setActiveModeButton("data-recommend-mode", recommendMode);
+    setActiveModeButton("data-date-sort", dateSortMode);
+
+    if (els.filterDetails) els.filterDetails.open = false;
+    if (els.recommendDetails) els.recommendDetails.open = true;
+    if (els.dateDetails) els.dateDetails.open = true;
+    if (els.sungDetails) els.sungDetails.open = false;
+    if (els.recDetails) els.recDetails.open = false;
+  }
+
+  function setActiveModeButton(attributeName, value) {
+    document.querySelectorAll(`[${attributeName}]`).forEach(button => {
+      button.classList.toggle("active", button.getAttribute(attributeName) === value);
+    });
+  }
+
+  function scrollToPageTop() {
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    });
   }
 
   function scrollToFilterSection() {
@@ -2208,9 +2239,8 @@
   function getSearchFieldValues(song, mode) {
     const titleValues = [getDisplayTitle(song), ...getTitleValues(song)];
     const artistValues = [getDisplayArtist(song), ...getArtistValues(song)];
-    const categoryValues = getCategoryValues(song);
-    const countryValues = getCountryValues(song);
     const dateValues = [formatPlainDate(song), formatSongDate(song), `${song.year}-${song.month}-${song.day}`];
+    const idValues = [song && song.id];
 
     if (mode === "title") return titleValues;
     if (mode === "artist") return artistValues;
@@ -2219,8 +2249,9 @@
     return [
       ...titleValues,
       ...artistValues,
-      ...dateValues
-    ];
+      ...dateValues,
+      ...idValues
+    ].filter(Boolean);
   }
 
   function getSearchHaystack(song, mode) {
@@ -2525,18 +2556,25 @@
     if (!count) {
       if (els.coverEmpty) els.coverEmpty.hidden = false;
       if (els.coverCarousel) els.coverCarousel.hidden = true;
+      setCoverNavHidden(true);
       els.coverTrack.innerHTML = "";
       return;
     }
 
     if (els.coverEmpty) els.coverEmpty.hidden = true;
     if (els.coverCarousel) els.coverCarousel.hidden = false;
+    setCoverNavHidden(false);
 
     coverIndex = wrapIndex(coverIndex, count);
     const visible = getVisibleCoverItems();
     els.coverTrack.innerHTML = visible.map(renderCoverCard).join("");
     bindCoverCards();
     enrichCoverTitles(visible);
+  }
+
+  function setCoverNavHidden(hidden) {
+    if (els.coverPrevButton) els.coverPrevButton.hidden = Boolean(hidden);
+    if (els.coverNextButton) els.coverNextButton.hidden = Boolean(hidden);
   }
 
   function getVisibleCoverItems() {
@@ -2561,16 +2599,8 @@
   }
 
   function bindCoverCards() {
-    if (!els.coverTrack) return;
-    els.coverTrack.querySelectorAll("[data-cover-index]").forEach(card => {
-      card.addEventListener("click", event => {
-        const index = Number(card.dataset.coverIndex || 0);
-        if (index !== coverIndex) {
-          event.preventDefault();
-          moveCoverCarousel(index > coverIndex ? 1 : -1);
-        }
-      });
-    });
+    // v005: 좌/우 카드도 즉시 링크를 열어야 하므로 클릭 이동 처리 없음.
+    // 캐러셀 이동은 버튼, 휠, 드래그/스와이프로만 처리한다.
   }
 
   async function enrichCoverTitles(items) {
@@ -2680,18 +2710,25 @@
     if (!count) {
       if (els.recEmpty) els.recEmpty.hidden = false;
       if (els.recCarousel) els.recCarousel.hidden = true;
+      setRecNavHidden(true);
       els.recTrack.innerHTML = "";
       return;
     }
 
     if (els.recEmpty) els.recEmpty.hidden = true;
     if (els.recCarousel) els.recCarousel.hidden = false;
+    setRecNavHidden(false);
 
     recIndex = wrapIndex(recIndex, count);
     const visible = getVisibleRecItems();
     els.recTrack.innerHTML = visible.map(item => renderCarouselMediaCard(item, "rec")).join("");
     bindRecCards();
     enrichRecTitles(visible);
+  }
+
+  function setRecNavHidden(hidden) {
+    if (els.recPrevButton) els.recPrevButton.hidden = Boolean(hidden);
+    if (els.recNextButton) els.recNextButton.hidden = Boolean(hidden);
   }
 
   function getVisibleRecItems() {
@@ -2724,16 +2761,8 @@
   }
 
   function bindRecCards() {
-    if (!els.recTrack) return;
-    els.recTrack.querySelectorAll("[data-rec-index]").forEach(card => {
-      card.addEventListener("click", event => {
-        const index = Number(card.dataset.recIndex || 0);
-        if (index !== recIndex) {
-          event.preventDefault();
-          moveRecCarousel(index > recIndex ? 1 : -1);
-        }
-      });
-    });
+    // v005: 좌/우 카드도 즉시 링크를 열어야 하므로 클릭 이동 처리 없음.
+    // 캐러셀 이동은 버튼, 휠, 드래그/스와이프로만 처리한다.
   }
 
   async function enrichRecTitles(items) {
@@ -2791,32 +2820,64 @@
 
   function bindCarouselSwipe(element, moveFn) {
     if (!element || typeof moveFn !== "function") return;
-    let startX = 0;
-    let startY = 0;
-    let tracking = false;
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchTracking = false;
+    let suppressNextClick = false;
+    let lastWheelAt = 0;
+
+    const shouldMove = (dx, dy) => {
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      return absX >= 46 && absX >= absY * 1.25;
+    };
+
+    const moveFromDelta = dx => {
+      moveFn(dx < 0 ? 1 : -1);
+    };
+
+    element.addEventListener("click", event => {
+      if (!suppressNextClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      suppressNextClick = false;
+    }, true);
+
+    element.addEventListener("wheel", event => {
+      const dominant = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (Math.abs(dominant) < 18) return;
+
+      const now = Date.now();
+      if (now - lastWheelAt < 420) return;
+      lastWheelAt = now;
+      event.preventDefault();
+      moveFn(dominant > 0 ? 1 : -1);
+    }, { passive: false });
 
     element.addEventListener("touchstart", event => {
       const touch = event.touches && event.touches[0];
       if (!touch) return;
-      startX = touch.clientX;
-      startY = touch.clientY;
-      tracking = true;
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      touchTracking = true;
     }, { passive: true });
 
     element.addEventListener("touchend", event => {
-      if (!tracking) return;
-      tracking = false;
+      if (!touchTracking) return;
+      touchTracking = false;
       const touch = event.changedTouches && event.changedTouches[0];
       if (!touch) return;
 
-      const dx = touch.clientX - startX;
-      const dy = touch.clientY - startY;
-      const absX = Math.abs(dx);
-      const absY = Math.abs(dy);
-      if (absX < 46 || absX < absY * 1.25) return;
+      const dx = touch.clientX - touchStartX;
+      const dy = touch.clientY - touchStartY;
+      if (!shouldMove(dx, dy)) return;
 
       event.preventDefault();
-      moveFn(dx < 0 ? 1 : -1);
+      suppressNextClick = true;
+      moveFromDelta(dx);
+      window.setTimeout(() => { suppressNextClick = false; }, 120);
     }, { passive: false });
   }
 
