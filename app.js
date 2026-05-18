@@ -11,6 +11,8 @@
   const SETTINGS_CSV_URL = CONFIG.SETTINGS_CSV_URL || "";
   const SEARCH_ALIASES_CSV_URL = CONFIG.SEARCH_ALIASES_CSV_URL || "";
   const CSV_CACHE_PREFIX = "csv_cache_";
+  const SONGS_CSV_CACHE_NAME = "songs_title_artist_schema_v003";
+  const LOCAL_DATA_CACHE_KEY = "songs_data_cache_title_artist_schema_v003";
   const SETTINGS_VERSION_SONGS = "version_songs";
   const SETTINGS_VERSION_SEARCH_ALIASES = "version_search_aliases";
   const LIKE_COOLDOWN_MS = Number(CONFIG.LIKE_COOLDOWN_MS || 60000);
@@ -20,6 +22,10 @@
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
   const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
+  const YOUTUBE_SLOW_FIRST_MESSAGE_MS = 8000;
+  const YOUTUBE_SLOW_SECOND_MESSAGE_MS = 2000;
+  const YOUTUBE_NO_RESPONSE_CLOSE_MS = 10000;
+  const YOUTUBE_NO_RESPONSE_NOTICE_MS = 3000;
 
   const RECOMMEND_LIMITS = {
     random: 5,
@@ -67,6 +73,13 @@
     coverTrack: document.getElementById("coverTrack"),
     coverPrevButton: document.getElementById("coverPrevButton"),
     coverNextButton: document.getElementById("coverNextButton"),
+    recDetails: document.getElementById("recDetails"),
+    recDescription: document.getElementById("recDescription"),
+    recEmpty: document.getElementById("recEmpty"),
+    recCarousel: document.getElementById("recCarousel"),
+    recTrack: document.getElementById("recTrack"),
+    recPrevButton: document.getElementById("recPrevButton"),
+    recNextButton: document.getElementById("recNextButton"),
     youtubeModal: document.getElementById("youtubeModal"),
     youtubeModalClose: document.getElementById("youtubeModalClose"),
     youtubeFrameWrap: document.getElementById("youtubeFrameWrap"),
@@ -100,11 +113,18 @@
   let dateSortMode = "desc";
   let sungMode = "song";
   let sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+  let currentSungGroups = new Map();
+  let currentDateGroups = new Map();
   let coverItems = [];
   let coverIndex = 0;
   let coverMoving = false;
   let coverHover = false;
   let coverAutoTimer = null;
+  let recItems = [];
+  let recIndex = 0;
+  let recMoving = false;
+  let recHover = false;
+  let recAutoTimer = null;
   let likePostEnabled = true;
   let currentModalSongId = "";
   let youtubePlayer = null;
@@ -113,6 +133,9 @@
   let youtubeLoadingFadeTimer = null;
   let youtubeLoadingStatusTimer = null;
   let youtubeBufferingTimer = null;
+  let youtubeSlowSecondTimer = null;
+  let youtubeNoResponseTimer = null;
+  let youtubeStartedPlaying = false;
   let currentYoutubeLoadingText = "";
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
@@ -136,6 +159,7 @@
     updateFilterSummaryHelp();
     startCooldownTimer();
     startCoverAutoTimer();
+    startRecAutoTimer();
     bindResponsiveRender();
     showPageLoading("...LOADING...", "설정 불러오는 중....");
     currentSettingsRows = await loadSettingsRows();
@@ -159,7 +183,7 @@
 
   function bindEvents() {
     els.searchInput.addEventListener("input", () => {
-      collapseCoverSection();
+      applyFilterResultPanelState();
       applyAndRender(true);
     });
     els.searchInput.addEventListener("blur", () => els.searchInput.classList.remove("input-active"));
@@ -171,7 +195,7 @@
     window.addEventListener("wheel", deactivateSearchIfFilterOutOfView, { passive: true });
     window.addEventListener("touchmove", deactivateSearchIfFilterOutOfView, { passive: true });
     if (els.searchMode) els.searchMode.addEventListener("change", () => {
-      collapseCoverSection();
+      applyFilterResultPanelState();
       applyAndRender(true);
     });
 
@@ -186,18 +210,18 @@
 
     [els.yearFilter, els.monthFilter, els.categoryFilter, els.countryFilter].forEach(select => {
       select.addEventListener("change", () => {
-        collapseCoverSection();
+        applyFilterResultPanelState();
         refreshDayFilterOptions();
         applyAndRender(true);
       });
     });
     els.dayFilter.addEventListener("change", () => {
-      collapseCoverSection();
+      applyFilterResultPanelState();
       applyAndRender(true);
     });
 
     els.resetButton.addEventListener("click", () => {
-      collapseCoverSection();
+      applyFilterResultPanelState();
       resetFilters();
       applyAndRender(true);
     });
@@ -279,6 +303,7 @@
       els.coverCarousel.addEventListener("touchend", () => {
         window.setTimeout(() => { coverHover = false; }, 1200);
       }, { passive: true });
+      bindCarouselSwipe(els.coverCarousel, direction => moveCoverCarousel(direction));
     }
 
     if (els.coverPrevButton) {
@@ -287,6 +312,30 @@
 
     if (els.coverNextButton) {
       els.coverNextButton.addEventListener("click", () => moveCoverCarousel(1));
+    }
+
+    if (els.recDetails) {
+      els.recDetails.addEventListener("toggle", () => {
+        if (els.recDetails.open) renderRecSection();
+      });
+    }
+
+    if (els.recCarousel) {
+      els.recCarousel.addEventListener("mouseenter", () => { recHover = true; });
+      els.recCarousel.addEventListener("mouseleave", () => { recHover = false; });
+      els.recCarousel.addEventListener("touchstart", () => { recHover = true; }, { passive: true });
+      els.recCarousel.addEventListener("touchend", () => {
+        window.setTimeout(() => { recHover = false; }, 1200);
+      }, { passive: true });
+      bindCarouselSwipe(els.recCarousel, direction => moveRecCarousel(direction));
+    }
+
+    if (els.recPrevButton) {
+      els.recPrevButton.addEventListener("click", () => moveRecCarousel(-1));
+    }
+
+    if (els.recNextButton) {
+      els.recNextButton.addEventListener("click", () => moveRecCarousel(1));
     }
 
     els.youtubeModal.addEventListener("click", event => {
@@ -398,8 +447,7 @@
   }
 
   function normalizeBoolean(value) {
-    const text = String(value ?? "").trim().toLowerCase();
-    return ["true", "1", "yes", "y", "on", "o", "ok", "예", "네", "참", "TRUE".toLowerCase()].includes(text);
+    return String(value ?? "").trim().toLowerCase() === "true";
   }
 
   function parseAliasesCell(value) {
@@ -500,10 +548,12 @@
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
           applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
           coverItems = normalizeCoverItems(cached.covers || []);
+          recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
           likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
           renderNotice(currentNoticeItems);
           renderFooter();
           renderCoverSection();
+          renderRecSection();
           buildFilters(allSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
@@ -516,10 +566,12 @@
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
       applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
       coverItems = normalizeCoverItems(payload.covers || []);
+      recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       renderNotice(currentNoticeItems);
       renderFooter();
       renderCoverSection();
+      renderRecSection();
       writeLocalJsonCache({ 
         data: allSongs,
         notices: currentNoticeItems,
@@ -528,6 +580,7 @@
         h1: els.pageTitle ? els.pageTitle.textContent : "",
         h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true,
         covers: coverItems,
+        recs: recItems,
         settings: { like_post_enabled: likePostEnabled },
         saved_at: Date.now()
       });
@@ -544,10 +597,12 @@
         currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
         applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
         coverItems = normalizeCoverItems(cached.covers || []);
+        recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
         likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
         renderNotice(currentNoticeItems);
         renderFooter();
         renderCoverSection();
+        renderRecSection();
         buildFilters(allSongs);
         applyAndRender(true);
         setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length} · ⓒ`);
@@ -575,7 +630,7 @@
 
       const tasks = [
         loadVersionedCsvRows({
-          cacheName: "songs",
+          cacheName: SONGS_CSV_CACHE_NAME,
           url: SONGS_CSV_URL,
           version: songsVersion,
           forceNetwork
@@ -595,6 +650,7 @@
       const [songsRows, likesRows, noticeRows = []] = await Promise.all(tasks);
       const notices = extractNoticeItemsFromRows(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
+      const recs = extractRecItemsFromRows(noticeRows);
       const footerText = extractFooterTextFromRows(noticeRows);
       const pageMeta = extractPageMetaFromRows(noticeRows);
       const settings = extractSettingsFromRows(effectiveSettingsRows);
@@ -603,6 +659,7 @@
         data: mergeSongsAndLikes(songsRows, likesRows),
         notices,
         covers,
+        recs,
         footerText,
         title: pageMeta.title,
         h1: pageMeta.h1,
@@ -621,6 +678,7 @@
       data,
       notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
       covers: Array.isArray(json) ? [] : (json.covers || []),
+      recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
       footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
       title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
       h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
@@ -822,6 +880,7 @@
       recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
       dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
       sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+      applyFilterResultPanelState();
       if (recommendMode === "random") randomPoolIds = [];
     }
 
@@ -939,6 +998,7 @@
 
   function renderDateSection() {
     const groups = getDateGroupsBySortMode(filteredSongs);
+    currentDateGroups = new Map(groups.map(group => [group.key, group]));
     els.dateDescription.textContent = getDateDescription(groups.length);
     const visibleGroups = groups.slice(0, dateVisibleDateCount);
 
@@ -967,6 +1027,7 @@
       const countText = dateSortMode === "likes_total"
         ? `${group.items.length}곡 · 추천 ${group.likesTotal}`
         : `${group.items.length}곡`;
+      const bodyHtml = collapsed ? "" : renderDateGroupItems(group);
       
       return `
         <section class="date-group">
@@ -974,7 +1035,7 @@
             <span>${escapeHtml(group.label)}</span>
             <span class="date-group-count">${escapeHtml(countText)}</span>
           </button>
-          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${group.items.map(renderSongCard).join("")}</div>
+          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${bodyHtml}</div>
         </section>
       `;
     }).join("");
@@ -986,12 +1047,31 @@
     els.dateMoreButton.hidden = dateVisibleDateCount >= groups.length;
     els.dateMoreButton.textContent = dateSortMode === "likes_total" ? "더 보기" : "더 보기";
   }
+
+  function renderDateGroupItems(group) {
+    if (!group || !Array.isArray(group.items)) return "";
+    return group.items.map(renderSongCard).join("");
+  }
+
+  function renderDateGroupBody(key, body) {
+    const group = currentDateGroups.get(key);
+    if (!group || !body) return;
+    if (!body.innerHTML.trim()) {
+      body.innerHTML = renderDateGroupItems(group);
+    }
+    bindLikeButtons(body);
+    bindYoutubeButtons(body);
+    bindFilterButtons(body);
+  }
   
   function getDateGroupsBySortMode(songs) {
     const sortedSongs = [...songs].sort(dateSortMode === "asc" ? compareDateAsc : compareDateDesc);
     const groups = groupByDate(sortedSongs);
 
     if (dateSortMode !== "likes_total") {
+      groups.forEach(group => {
+        group.items.sort(dateSortMode === "asc" ? compareDateAsc : compareDateDesc);
+      });
       return groups;
     }
     
@@ -1026,6 +1106,7 @@
     if (!els.sungList) return;
 
     const groups = groupBySung(filteredSongs, sungMode);
+    currentSungGroups = new Map(groups.map(group => [group.key, group]));
     const visibleGroups = groups.slice(0, sungVisibleGroupCount);
     const hasMore = sungVisibleGroupCount < groups.length;
 
@@ -1047,7 +1128,7 @@
             <span>${escapeHtml(group.label)}</span>
             <span class="date-group-count">${group.items.length}곡</span>
           </button>
-          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${group.items.map(renderSongCard).join("")}</div>
+          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${collapsed ? "" : group.items.map(renderSongCard).join("")}</div>
         </section>
       `;
     }).join("");
@@ -1066,6 +1147,17 @@
     bindFilterButtons(els.sungList);
     bindDateGroupToggles(els.sungList, "sung");
     bindSungMoreButton();
+  }
+
+  function renderSungGroupBody(key, body) {
+    const group = currentSungGroups.get(key);
+    if (!group || !body) return;
+    if (!body.innerHTML.trim()) {
+      body.innerHTML = group.items.map(renderSongCard).join("");
+    }
+    bindLikeButtons(body);
+    bindYoutubeButtons(body);
+    bindFilterButtons(body);
   }
 
   function bindSungMoreButton() {
@@ -1109,9 +1201,14 @@
       map.get(key).items.push(song);
     });
 
-    return [...map.values()].sort((a, b) => {
-      return b.items.length - a.items.length || a.label.localeCompare(b.label, "ko");
-    });
+    return [...map.values()]
+      .map(group => ({
+        ...group,
+        items: [...group.items].sort(compareDateSongLikesDesc)
+      }))
+      .sort((a, b) => {
+        return b.items.length - a.items.length || a.label.localeCompare(b.label, "ko");
+      });
   }
   
   function splitMultiValue(value) {
@@ -1127,17 +1224,17 @@
   }
 
   function getTitleValues(song) {
-    const values = splitMultiValue(song.artist);
-    return values.length
-      ? values
-      : [String(song.artist || "").trim()].filter(Boolean);
-  }
-
-  function getArtistValues(song) {
     const values = splitMultiValue(song.title);
     return values.length
       ? values
       : [String(song.title || "").trim()].filter(Boolean);
+  }
+
+  function getArtistValues(song) {
+    const values = splitMultiValue(song.artist);
+    return values.length
+      ? values
+      : [String(song.artist || "").trim()].filter(Boolean);
   }
 
   function getCategoryValues(song) {
@@ -1205,6 +1302,14 @@
         });
       });
     });
+
+    root.querySelectorAll(".song-title-clickable").forEach(title => {
+      title.addEventListener("click", event => {
+        if (event.target.closest("button, a, input, select, textarea")) return;
+        const button = title.querySelector("[data-youtube-url]");
+        if (button) button.click();
+      });
+    });
   }
 
   function bindFilterButtons(root) {
@@ -1225,6 +1330,20 @@
         const collapsed = body.classList.toggle("collapsed");
         button.classList.toggle("collapsed", collapsed);
         setGroupCollapsed(namespace, key, collapsed);
+
+        if (namespace === "sung") {
+          if (collapsed) {
+            body.innerHTML = "";
+          } else {
+            renderSungGroupBody(key, body);
+          }
+        } else if (namespace === "date") {
+          if (collapsed) {
+            body.innerHTML = "";
+          } else {
+            renderDateGroupBody(key, body);
+          }
+        }
       });
     });
   }
@@ -1234,7 +1353,7 @@
     const value = button.dataset.filterValue || "";
 
     const fromSungSection = Boolean(button.closest("#sungDetails"));
-    collapseCoverSection();
+    applyFilterResultPanelState();
     if (els.filterDetails) els.filterDetails.open = true;
 
     if (type === "search" || type === "artist") {
@@ -1261,10 +1380,15 @@
   }
 
   function collapseNonDateSections() {
-    if (els.coverDetails) els.coverDetails.open = false;
+    if (els.coverDetails) els.coverDetails.open = true;
     if (els.recommendDetails) els.recommendDetails.open = false;
     if (els.sungDetails) els.sungDetails.open = false;
+    if (els.recDetails) els.recDetails.open = false;
     if (els.dateDetails) els.dateDetails.open = true;
+  }
+
+  function applyFilterResultPanelState() {
+    collapseNonDateSections();
   }
 
   function scrollToFilterSection() {
@@ -1329,8 +1453,8 @@
     const liked = isLocallyLiked(song.id);
     const dateText = formatSongDate(song);
 
-    const titleText = String(song.artist || "").trim() || "곡명 없음";
-    const artistText = String(song.title || "").trim() || "아티스트 없음";
+    const titleText = getDisplayTitle(song);
+    const artistText = getDisplayArtist(song);
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
@@ -1359,7 +1483,7 @@
     return `
       <article class="song-card" data-id="${escapeHtml(song.id)}">
         <div>
-          <h3 class="song-title">${titleHtml}</h3>
+          <h3 class="song-title ${song.link ? "song-title-clickable" : ""}">${titleHtml}</h3>
           <div class="meta">
             ${artistBadgesHtml}
             <button class="badge badge-button" type="button" data-filter-type="date" data-filter-year="${escapeHtml(song.year)}" data-filter-month="${escapeHtml(song.month)}" data-filter-day="${escapeHtml(song.day)}" data-filter-date="${escapeHtml(formatPlainDate(song))}">${escapeHtml(dateText)}</button>
@@ -1720,6 +1844,7 @@
 
     const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
     const token = ++youtubePlayerToken;
+    youtubeStartedPlaying = false;
 
     destroyYoutubePlayer_(false);
     currentModalSongId = meta.id || "";
@@ -1844,12 +1969,13 @@
 
     switch (event.data) {
       case YT.PlayerState.PLAYING:
+        youtubeStartedPlaying = true;
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
         break;
       case YT.PlayerState.BUFFERING:
-        scheduleYoutubeBufferingStatus_(token);
+        if (youtubeStartedPlaying) scheduleYoutubeBufferingStatus_(token);
         break;
       case YT.PlayerState.CUED:
         clearYoutubeBufferingTimer_();
@@ -1906,15 +2032,30 @@
   function scheduleYoutubeLoadingStatus_(token) {
     clearYoutubeLoadingStatusTimer_();
     youtubeLoadingStatusTimer = window.setTimeout(() => {
-      if (!isCurrentYoutubeToken_(token)) return;
-      showYoutubeLoadingMessage("영상 응답을 기다리는 중...");
-    }, 8000);
+      if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+      showYoutubeLoadingMessage("영상의 응답이 느린 것 같아요…");
+
+      youtubeSlowSecondTimer = window.setTimeout(() => {
+        if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+        showYoutubeLoadingMessage("영상의 응답을 조금 더 기다려 보는 중……");
+
+        youtubeNoResponseTimer = window.setTimeout(() => {
+          if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+          showYoutubeLoadingMessage("영상이 응답하지 않아 팝업을 닫을게요…", { error: true });
+          youtubeNoResponseTimer = window.setTimeout(() => {
+            if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+            closeYoutubeModal();
+          }, YOUTUBE_NO_RESPONSE_NOTICE_MS);
+        }, YOUTUBE_NO_RESPONSE_CLOSE_MS);
+      }, YOUTUBE_SLOW_SECOND_MESSAGE_MS);
+    }, YOUTUBE_SLOW_FIRST_MESSAGE_MS);
   }
 
   function scheduleYoutubeBufferingStatus_(token) {
     clearYoutubeBufferingTimer_();
+    if (!youtubeStartedPlaying) return;
     youtubeBufferingTimer = window.setTimeout(() => {
-      if (!isCurrentYoutubeToken_(token)) return;
+      if (!isCurrentYoutubeToken_(token) || !youtubeStartedPlaying) return;
       showYoutubeLoadingMessage("영상을 버퍼링하는 중...");
     }, 1500);
   }
@@ -1932,6 +2073,14 @@
     if (youtubeLoadingStatusTimer) {
       window.clearTimeout(youtubeLoadingStatusTimer);
       youtubeLoadingStatusTimer = null;
+    }
+    if (youtubeSlowSecondTimer) {
+      window.clearTimeout(youtubeSlowSecondTimer);
+      youtubeSlowSecondTimer = null;
+    }
+    if (youtubeNoResponseTimer) {
+      window.clearTimeout(youtubeNoResponseTimer);
+      youtubeNoResponseTimer = null;
     }
   }
 
@@ -2070,11 +2219,6 @@
     return [
       ...titleValues,
       ...artistValues,
-      ...categoryValues,
-      ...countryValues,
-      song.id,
-      song.day_p,
-      song.timeline,
       ...dateValues
     ];
   }
@@ -2084,13 +2228,18 @@
   }
 
   function matchesSearchQuery(song, mode, query) {
-    if (query.exactTerms.length) {
+    const exactTerms = Array.isArray(query.exactTerms) ? query.exactTerms : [];
+    const terms = Array.isArray(query.terms) ? query.terms : [];
+
+    if (exactTerms.length) {
       const exactValues = new Set(getSearchFieldValues(song, mode).map(normalizeSearchText).filter(Boolean));
-      return query.exactTerms.some(term => exactValues.has(term));
+      if (exactTerms.some(term => exactValues.has(term))) return true;
+      if (query.exactOnly) return false;
     }
 
+    if (!terms.length) return false;
     const haystack = getSearchHaystack(song, mode);
-    return query.terms.some(term => haystack.includes(term));
+    return terms.some(term => haystack.includes(term));
   }
 
   function refreshDayFilterOptions() {
@@ -2291,6 +2440,68 @@
       .filter(Boolean));
   }
 
+
+  function extractRecItemsFromRows(rows) {
+    return rows
+      .filter(row => String(row.key || "").trim().toLowerCase() === "rec")
+      .map(row => makeRecItemFromUrl(
+        String(row.value || "").trim(),
+        String(row.link || row.title || "").trim()
+      ))
+      .filter(Boolean);
+  }
+
+  function makeRecItemFromUrl(url, title = "") {
+    const normalizedUrl = normalizeYoutubeUrlForParse(String(url || "").trim());
+    if (!normalizedUrl) return null;
+
+    const videoId = extractYoutubeVideoId(normalizedUrl);
+    const playlistId = extractYoutubePlaylistId(normalizedUrl);
+    if (!videoId && !playlistId) return null;
+
+    return {
+      id: videoId || playlistId,
+      url: normalizedUrl,
+      title: String(title || "").trim() || "추천 팬 영상을 불러오는 중...",
+      thumbnail: videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg` : "",
+      fallbackThumbnail: videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg` : "",
+      type: playlistId && !videoId ? "playlist" : "video"
+    };
+  }
+
+  function normalizeRecItems(input) {
+    if (!Array.isArray(input)) return [];
+    return shuffleArray(input
+      .map(item => {
+        if (typeof item === "string") return makeRecItemFromUrl(item);
+        const url = String(item && item.url || item && item.value || "").trim();
+        const made = makeRecItemFromUrl(url, String(item && item.title || "").trim());
+        if (!made) return null;
+        return {
+          ...made,
+          title: String(item && item.title || made.title || "추천 팬 영상").trim() || "추천 팬 영상",
+          thumbnail: String(item && item.thumbnail || made.thumbnail || "").trim() || made.thumbnail,
+          fallbackThumbnail: String(item && item.fallbackThumbnail || made.fallbackThumbnail || "").trim() || made.fallbackThumbnail,
+          type: String(item && item.type || made.type || "video").trim() || "video"
+        };
+      })
+      .filter(Boolean));
+  }
+
+  function extractYoutubePlaylistId(url) {
+    const raw = normalizeYoutubeUrlForParse(String(url || "").trim());
+    if (!raw) return "";
+
+    try {
+      const parsed = new URL(raw);
+      const host = parsed.hostname.replace(/^www\./, "");
+      if (!host.endsWith("youtube.com") && host !== "youtu.be") return "";
+      return String(parsed.searchParams.get("list") || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
   function formatNoticeItemHtml(item) {
     const body = formatNoticeTextHtml(item.text);
     if (item.link) {
@@ -2452,6 +2663,161 @@
 
   function collapseCoverSection() {
     if (els.coverDetails && els.coverDetails.open) els.coverDetails.open = false;
+  }
+
+  function collapseRecSection() {
+    if (els.recDetails && els.recDetails.open) els.recDetails.open = false;
+  }
+
+  function renderRecSection() {
+    if (!els.recDetails || !els.recTrack) return;
+
+    const count = recItems.length;
+    if (els.recDescription) {
+      els.recDescription.textContent = count ? `추천 팬 영상 ${count}개를 표시합니다.` : "표시할 추천 팬 영상이 없습니다.";
+    }
+
+    if (!count) {
+      if (els.recEmpty) els.recEmpty.hidden = false;
+      if (els.recCarousel) els.recCarousel.hidden = true;
+      els.recTrack.innerHTML = "";
+      return;
+    }
+
+    if (els.recEmpty) els.recEmpty.hidden = true;
+    if (els.recCarousel) els.recCarousel.hidden = false;
+
+    recIndex = wrapIndex(recIndex, count);
+    const visible = getVisibleRecItems();
+    els.recTrack.innerHTML = visible.map(item => renderCarouselMediaCard(item, "rec")).join("");
+    bindRecCards();
+    enrichRecTitles(visible);
+  }
+
+  function getVisibleRecItems() {
+    const count = recItems.length;
+    if (!count) return [];
+    return [-1, 0, 1].map(offset => {
+      const actualIndex = wrapIndex(recIndex + offset, count);
+      return { ...recItems[actualIndex], _actualIndex: actualIndex, _slot: offset };
+    });
+  }
+
+  function renderCarouselMediaCard(item, kind) {
+    const isCenter = item._slot === 0;
+    const title = item.title || (kind === "rec" ? "추천 팬 영상" : "커버곡");
+    const indexAttr = kind === "rec" ? "data-rec-index" : "data-cover-index";
+    const titleAttr = kind === "rec" ? "data-rec-title" : "data-cover-title";
+    const thumb = item.thumbnail
+      ? `<img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}else{this.remove();this.parentElement.classList.add('cover-thumb-placeholder');}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />`
+      : `<div class="cover-thumb-placeholder-content">${item.type === "playlist" ? "▶ LIST" : "▶"}</div>`;
+    const thumbClass = item.thumbnail ? "cover-thumb-wrap" : "cover-thumb-wrap cover-thumb-placeholder";
+
+    return `
+      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" ${indexAttr}="${escapeHtml(item._actualIndex)}">
+        <div class="${thumbClass}">
+          ${thumb}
+        </div>
+        <div class="cover-title" ${titleAttr}="${escapeHtml(item.id)}">${escapeHtml(title)}</div>
+      </a>
+    `;
+  }
+
+  function bindRecCards() {
+    if (!els.recTrack) return;
+    els.recTrack.querySelectorAll("[data-rec-index]").forEach(card => {
+      card.addEventListener("click", event => {
+        const index = Number(card.dataset.recIndex || 0);
+        if (index !== recIndex) {
+          event.preventDefault();
+          moveRecCarousel(index > recIndex ? 1 : -1);
+        }
+      });
+    });
+  }
+
+  async function enrichRecTitles(items) {
+    const uniqueItems = items.filter(item => item && item.url && (!recItems[item._actualIndex] || recItems[item._actualIndex].title === "추천 팬 영상을 불러오는 중..."));
+    await Promise.all(uniqueItems.map(async item => {
+      try {
+        const title = await fetchYoutubeOembedTitle(item.url);
+        if (!title) return;
+        const target = recItems[item._actualIndex];
+        if (target) target.title = title;
+        if (els.recTrack) {
+          els.recTrack.querySelectorAll(`[data-rec-title="${cssEscape(item.id)}"]`).forEach(el => {
+            el.textContent = title;
+          });
+        }
+      } catch (err) {
+        const target = recItems[item._actualIndex];
+        if (target && target.title === "추천 팬 영상을 불러오는 중...") target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 팬 영상";
+      }
+    }));
+  }
+
+  function moveRecCarousel(direction) {
+    if (!recItems.length || recMoving) return;
+    recMoving = true;
+    if (els.recTrack) {
+      els.recTrack.classList.remove("move-left", "move-right");
+      void els.recTrack.offsetWidth;
+      els.recTrack.classList.add(direction > 0 ? "move-left" : "move-right");
+    }
+
+    window.setTimeout(() => {
+      recIndex = wrapIndex(recIndex + direction, recItems.length);
+      if (els.recTrack) els.recTrack.classList.remove("move-left", "move-right");
+      recMoving = false;
+      renderRecSection();
+    }, 260);
+  }
+
+  function startRecAutoTimer() {
+    if (recAutoTimer) window.clearInterval(recAutoTimer);
+    recAutoTimer = window.setInterval(() => {
+      if (!shouldAutoMoveRec()) return;
+      moveRecCarousel(-1);
+    }, 10000);
+  }
+
+  function shouldAutoMoveRec() {
+    if (!els.recDetails || !els.recDetails.open) return false;
+    if (!els.recCarousel || els.recCarousel.hidden) return false;
+    if (recHover || recMoving) return false;
+    if (recItems.length <= 1) return false;
+    return isElementFullyVisible(els.recDetails);
+  }
+
+  function bindCarouselSwipe(element, moveFn) {
+    if (!element || typeof moveFn !== "function") return;
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    element.addEventListener("touchstart", event => {
+      const touch = event.touches && event.touches[0];
+      if (!touch) return;
+      startX = touch.clientX;
+      startY = touch.clientY;
+      tracking = true;
+    }, { passive: true });
+
+    element.addEventListener("touchend", event => {
+      if (!tracking) return;
+      tracking = false;
+      const touch = event.changedTouches && event.changedTouches[0];
+      if (!touch) return;
+
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      const absX = Math.abs(dx);
+      const absY = Math.abs(dy);
+      if (absX < 46 || absX < absY * 1.25) return;
+
+      event.preventDefault();
+      moveFn(dx < 0 ? 1 : -1);
+    }, { passive: false });
   }
 
   function updateFilterSummaryHelp() {
@@ -2806,7 +3172,7 @@
 
   function readLocalJsonCache() {
     try {
-      return JSON.parse(localStorage.getItem("songs_data_cache") || "null");
+      return JSON.parse(localStorage.getItem(LOCAL_DATA_CACHE_KEY) || "null");
     } catch {
       return null;
     }
@@ -2814,7 +3180,7 @@
 
   function writeLocalJsonCache(obj) {
     try {
-      localStorage.setItem("songs_data_cache", JSON.stringify(obj));
+      localStorage.setItem(LOCAL_DATA_CACHE_KEY, JSON.stringify(obj));
     } catch {
       //
     }
@@ -2829,36 +3195,48 @@
   }
 
   function buildSearchQuery(keyword) {
-    if (!keyword) return { terms: [], exactTerms: [] };
+    if (!keyword) return { terms: [], exactTerms: [], exactOnly: false };
 
-    const terms = new Set([keyword]);
+    const normalTerms = new Set([keyword]);
     const exactTerms = new Set();
+    let exactOnly = false;
 
     Object.entries(searchAliases).forEach(([base, entry]) => {
       const normalizedBase = normalizeSearchText(base);
       const aliasList = normalizeSearchAliasList(entry);
-      const normalizedAliases = [base, ...aliasList]
+      const normalizedAliases = aliasList
         .map(normalizeSearchText)
         .filter(Boolean);
 
-      const matched = normalizedAliases.some(term => term.includes(keyword) || keyword.includes(term));
+      if (isExactSearchAlias(entry)) {
+        if (keyword === normalizedBase) {
+          exactOnly = true;
+          const exactTargets = normalizedAliases.length ? normalizedAliases : [normalizedBase];
+          exactTargets.forEach(term => {
+            if (term) exactTerms.add(term);
+          });
+        }
+        return;
+      }
 
+      const candidates = [normalizedBase, ...normalizedAliases].filter(Boolean);
+      const matched = candidates.some(term => term.includes(keyword) || keyword.includes(term));
       if (matched) {
-        normalizedAliases.forEach(term => {
-          if (term) terms.add(term);
-          if (isExactSearchAlias(entry) && term) exactTerms.add(term);
+        candidates.forEach(term => {
+          if (term) normalTerms.add(term);
         });
       }
     });
 
     return {
-      terms: [...terms],
-      exactTerms: [...exactTerms]
+      terms: exactOnly ? [] : [...normalTerms],
+      exactTerms: [...exactTerms],
+      exactOnly
     };
   }
 
   function hasSearchQuery(query) {
-    return Boolean(query && (query.terms.length || query.exactTerms.length));
+    return Boolean(query && ((query.terms && query.terms.length) || (query.exactTerms && query.exactTerms.length)));
   }
 
   function normalizeSearchAliasList(entry) {
@@ -2900,17 +3278,33 @@
 
   function renderDataStatus() {
     if (!els.dataStatus) return;
-    els.dataStatus.innerHTML = formatDataStatusText(currentDataStatusText);
-    //els.dataStatus.textContent = formatDataStatusText(currentDataStatusText);
+    const formatted = formatDataStatusParts(currentDataStatusText);
+    els.dataStatus.textContent = "";
+
+    if (!formatted) {
+      els.dataStatus.textContent = String(currentDataStatusText || "");
+      return;
+    }
+
+    els.dataStatus.appendChild(document.createTextNode(`${formatted.dateText} · `));
+    const count = document.createElement("span");
+    count.className = "data-status-count";
+    count.title = visitorCount;
+    count.textContent = formatted.songCount;
+    els.dataStatus.appendChild(count);
+    if (formatted.suffix) {
+      els.dataStatus.appendChild(document.createTextNode(formatted.suffix));
+    }
   }
 
-  function formatDataStatusText(text) {
+  function formatDataStatusParts(text) {
     const source = String(text || "");
     const match = source.match(/^(\d{2}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2})\s*·\s*(\d+)(?:곡)?(.*)$/);
-    if (!match) return source;
+    if (!match) return null;
 
-    const [, dateText, songCount, suffix = ""] = match;
-    return `${dateText} · <span title="${visitorCount}">${songCount}</span>`;	//return `${dateText} · ${songCount} · ${visitorCount}${suffix}`;
+    const [, dateText, songCount, rawSuffix = ""] = match;
+    const suffix = /ⓒ/.test(rawSuffix) ? " · ⓒ" : "";
+    return { dateText, songCount, suffix };
   }
 
   function setupCounterTracking() {
