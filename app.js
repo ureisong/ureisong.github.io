@@ -1354,7 +1354,7 @@
     const type = button.dataset.filterType || "";
     const value = button.dataset.filterValue || "";
 
-    const fromSungSection = Boolean(button.closest("#sungDetails"));
+    resetFilters();
     applyFilterResultPanelState();
     if (els.filterDetails) els.filterDetails.open = true;
 
