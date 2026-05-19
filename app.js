@@ -11,8 +11,8 @@
   const SETTINGS_CSV_URL = CONFIG.SETTINGS_CSV_URL || "";
   const SEARCH_ALIASES_CSV_URL = CONFIG.SEARCH_ALIASES_CSV_URL || "";
   const CSV_CACHE_PREFIX = "csv_cache_";
-  const SONGS_CSV_CACHE_NAME = "songs_title_artist_schema_v003";
-  const LOCAL_DATA_CACHE_KEY = "songs_data_cache_title_artist_schema_v003";
+  const SONGS_CSV_CACHE_NAME = "songs_title_artist";
+  const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
   const SETTINGS_VERSION_SONGS = "version_songs";
   const SETTINGS_VERSION_SEARCH_ALIASES = "version_search_aliases";
   const LIKE_COOLDOWN_MS = Number(CONFIG.LIKE_COOLDOWN_MS || 60000);
@@ -3280,10 +3280,9 @@
         return;
       }
 
-      const candidates = [normalizedBase, ...normalizedAliases].filter(Boolean);
-      const matched = candidates.some(term => term.includes(keyword) || keyword.includes(term));
+      const matched = Boolean(normalizedBase) && (normalizedBase.includes(keyword) || keyword.includes(normalizedBase));
       if (matched) {
-        candidates.forEach(term => {
+        [normalizedBase, ...normalizedAliases].forEach(term => {
           if (term) normalTerms.add(term);
         });
       }
