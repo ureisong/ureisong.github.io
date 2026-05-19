@@ -3425,9 +3425,21 @@
       .replaceAll("'", "&#039;");
   }
 
-  function applyDarkMode(enabled) {
+  function applyDarkMode(enabled, save = true) {
     document.documentElement.classList.toggle("dark-mode", enabled);
-    localStorage.setItem("darkModeEnabled", enabled ? "1" : "0");
+
+    if (save) {
+      localStorage.setItem("darkModeEnabled", enabled ? "1" : "0");
+    }
+  }
+
+  function getInitialDarkModeEnabled() {
+    const saved = localStorage.getItem("darkModeEnabled");
+
+    if (saved === "0") return false;
+    if (saved === "1") return true;
+
+    return true;
   }
 
   function setupDarkModeToggle() {
@@ -3441,13 +3453,13 @@
     statusBox.appendChild(wrap);
 
     const checkbox = wrap.querySelector("input");
+    const enabled = getInitialDarkModeEnabled();
 
-    const saved = localStorage.getItem("darkModeEnabled") === "1";
-    checkbox.checked = saved;
-    applyDarkMode(saved);
+    checkbox.checked = enabled;
+    applyDarkMode(enabled, false);
 
     checkbox.addEventListener("change", () => {
-      applyDarkMode(checkbox.checked);
+      applyDarkMode(checkbox.checked, true);
     });
   }
 
