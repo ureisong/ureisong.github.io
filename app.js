@@ -360,7 +360,7 @@
         resetFilters();
         applyEscResultPanelState();
         applyAndRender(true);
-        scrollToPageTop();
+        scrollToRecommendSection();
         return;
       }
 
@@ -1422,6 +1422,17 @@
     });
   }
 
+  function scrollToRecommendSection() {
+    if (!els.recommendDetails) {
+      scrollToPageTop();
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      els.recommendDetails.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   function scrollToFilterSection() {
     if (!els.filterDetails) return;
     window.requestAnimationFrame(() => {
@@ -1486,11 +1497,12 @@
 
     const titleText = getDisplayTitle(song);
     const artistText = getDisplayArtist(song);
+    const modalArtistText = String(song.artist || "").trim() || artistText;
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
     const titleCoreHtml = song.link
-      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(artistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}">${escapeHtml(titleText)}</button>`
+      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}">${escapeHtml(titleText)}</button>`
       : `<span class="song-title-missing" title="다시보기가 없습니다">${escapeHtml(titleText)}</span>`;
 
     const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
