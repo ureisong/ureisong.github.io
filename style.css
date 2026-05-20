@@ -1821,3 +1821,75 @@ html.dark-mode #playlistPlayRandomButton {
     font-size: 12px;
   }
 }
+
+/* v018 playlist manager and feature toggle */
+html.playlist-disabled [data-playlist-feature] {
+  display: none !important;
+}
+
+.playlist-modal-card #playlistSelect,
+.playlist-modal-card .playlist-name-input {
+  width: 100%;
+}
+
+.playlist-name-input[hidden] {
+  display: none !important;
+}
+
+.playlist-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.playlist-play-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.playlist-bulk-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.playlist-action-row > *,
+.playlist-play-row > *,
+.playlist-bulk-row > * {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .playlist-action-row,
+  .playlist-play-row,
+  .playlist-bulk-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .playlist-bulk-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .playlist-action-row button,
+  .playlist-play-row button,
+  .playlist-bulk-row button {
+    padding-left: 6px;
+    padding-right: 6px;
+    white-space: nowrap;
+  }
+}
+
+/* v019 playlist modal tuning */
+@media (min-width: 721px) {
+  .header-main {
+    padding-bottom: 12px;
+  }
+}
+
+.playlist-modal-card h2 {
+  margin-top: -16px;
+}
