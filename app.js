@@ -41,6 +41,12 @@
   const DATE_RECOMMEND_MORE_STEP = 5;
   const SUNG_INITIAL_GROUP_COUNT = 50;
   const SUNG_MORE_STEP = 50;
+  const PLAYLIST_STORAGE_KEY = "urei_playlists_v1";
+  const PLAYLIST_SELECTED_KEY = "urei_selected_playlist_v1";
+  const PLAYLIST_END_CHECK_INTERVAL_MS = 250;
+  const PLAYLIST_ERROR_SKIP_MS = 1600;
+  const PLAYLIST_FADE_DURATION_MS = 2000;
+  const DEFAULT_PLAYLIST_NAME = "기본";
 
   const els = {
     dataStatus: document.getElementById("dataStatus"),
@@ -80,6 +86,22 @@
     recTrack: document.getElementById("recTrack"),
     recPrevButton: document.getElementById("recPrevButton"),
     recNextButton: document.getElementById("recNextButton"),
+    playlistOpenButton: document.getElementById("playlistOpenButton"),
+    playlistSummaryName: document.getElementById("playlistSummaryName"),
+    playlistModal: document.getElementById("playlistModal"),
+    playlistModalClose: document.getElementById("playlistModalClose"),
+    playlistNameInput: document.getElementById("playlistNameInput"),
+    playlistCreateButton: document.getElementById("playlistCreateButton"),
+    playlistSelect: document.getElementById("playlistSelect"),
+    playlistRenameButton: document.getElementById("playlistRenameButton"),
+    playlistDeleteButton: document.getElementById("playlistDeleteButton"),
+    playlistItems: document.getElementById("playlistItems"),
+    playlistEmpty: document.getElementById("playlistEmpty"),
+    playlistPlaySequentialButton: document.getElementById("playlistPlaySequentialButton"),
+    playlistPlayRandomButton: document.getElementById("playlistPlayRandomButton"),
+    playlistRepeatToggle: document.getElementById("playlistRepeatToggle"),
+    playlistRemoveSelectedButton: document.getElementById("playlistRemoveSelectedButton"),
+    playlistClearButton: document.getElementById("playlistClearButton"),
     youtubeModal: document.getElementById("youtubeModal"),
     youtubeModalClose: document.getElementById("youtubeModalClose"),
     youtubeFrameWrap: document.getElementById("youtubeFrameWrap"),
@@ -89,7 +111,18 @@
     modalSongTitle: document.getElementById("modalSongTitle"),
     modalSongArtist: document.getElementById("modalSongArtist"),
     modalSongFooter: document.getElementById("modalSongFooter"),
+    modalSongFooterText: document.getElementById("modalSongFooterText"),
+    modalFooterLikePanel: document.getElementById("modalFooterLikePanel"),
+    modalFooterPlaylistPanel: document.getElementById("modalFooterPlaylistPanel"),
     modalLikePanel: document.getElementById("modalLikePanel"),
+    playlistPlaybackBanner: document.getElementById("playlistPlaybackBanner"),
+    playlistPlayerControls: document.getElementById("playlistPlayerControls"),
+    playlistPlayerName: document.getElementById("playlistPlayerName"),
+    playlistPrevTrackButton: document.getElementById("playlistPrevTrackButton"),
+    playlistNextTrackButton: document.getElementById("playlistNextTrackButton"),
+    playlistShowListButton: document.getElementById("playlistShowListButton"),
+    playlistOrderToggleButton: document.getElementById("playlistOrderToggleButton"),
+    playlistRepeatPlayerToggle: document.getElementById("playlistRepeatPlayerToggle"),
     likeDisabledModal: document.getElementById("likeDisabledModal"),
     likeDisabledModalClose: document.getElementById("likeDisabledModalClose"),
     likeNoticeModalMessage: document.getElementById("likeNoticeModalMessage"),
@@ -143,12 +176,20 @@
   let currentFooterText = FOOTER_TEXT;
   let currentDataStatusText = "데이터 로딩 중...";
   let visitorCount = "…";
+  let playlists = [];
+  let selectedPlaylistId = "";
+  let playlistPlayback = null;
+  let playlistSegmentTimer = null;
+  let playlistSkipTimer = null;
+  let playlistVolumeFadeTimer = null;
 
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
     showPageLoading("...LOADING...", "초기화면 준비 중.");
     bindEvents();
+    loadPlaylists();
+    renderPlaylistSummary();
     setupFavicon();
     showPageLoading("...LOADING...", "공지사항 읽는 중..");
     renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
@@ -351,6 +392,9 @@
     if (els.likeDisabledModalClose) {
       els.likeDisabledModalClose.addEventListener("click", closeLikeDisabledModal);
     }
+
+    bindPlaylistManagerEvents();
+    bindPlaylistPlayerEvents();
 
     document.addEventListener("keydown", event => {
       const key = event.key;
@@ -716,6 +760,7 @@
           country: row.country,
           timeline: row.timeline,
           link: row.link,
+          end: row.end,
           sub1: row.sub1,
           sub2: row.sub2,
           sub3: row.sub3,
@@ -854,6 +899,7 @@
           countryValues: splitMultiValue(item.country),
           timeline: String(item.timeline || ""),
           link: String(item.link || ""),
+          end: String(item.end || ""),
           sub1: String(item.sub1 || ""),
           sub2: String(item.sub2 || ""),
           sub3: String(item.sub3 || ""),
@@ -929,6 +975,7 @@
     bindLikeButtons(els.recommendList);
     bindYoutubeButtons(els.recommendList);
     bindFilterButtons(els.recommendList);
+    bindPlaylistAddButtons(els.recommendList);
 
     if (recommendMode === "random") {
       els.recommendMoreButton.hidden = getRandomUniqueLinkedCandidates(filteredSongs).length <= getRandomRecommendLimit();
@@ -1045,6 +1092,7 @@
     bindLikeButtons(els.dateList);
     bindYoutubeButtons(els.dateList);
     bindFilterButtons(els.dateList);
+    bindPlaylistAddButtons(els.dateList);
     bindDateGroupToggles(els.dateList, "date");
     els.dateMoreButton.hidden = dateVisibleDateCount >= groups.length;
     els.dateMoreButton.textContent = dateSortMode === "likes_total" ? "더 보기" : "더 보기";
@@ -1064,8 +1112,128 @@
     bindLikeButtons(body);
     bindYoutubeButtons(body);
     bindFilterButtons(body);
+    bindPlaylistAddButtons(body);
   }
   
+  function isDesktopContextCopyEnabled() {
+    if (window.matchMedia) {
+      if (window.matchMedia("(max-width: 720px)").matches) return false;
+      if (window.matchMedia("(pointer: coarse)").matches) return false;
+    }
+    return true;
+  }
+
+  async function copyDateGroupInfoToClipboard(key) {
+    const group = currentDateGroups.get(key);
+    const dateText = getDateGroupCopyDateText(group);
+
+    if (!group || !Array.isArray(group.items) || !group.items.length) {
+      console.warn(`👉 ${dateText || key || "날짜 그룹"} 의 곡 정보를 복사 실패 했습니다`, { reason: "empty_group" });
+      return;
+    }
+
+    const text = makeDateGroupCopyText(group);
+
+    try {
+      await writeTextToClipboard(text);
+      console.log(`👉 ${dateText} 의 곡 정보를 복사 성공 했습니다`);
+    } catch (err) {
+      console.warn(`👉 ${dateText} 의 곡 정보를 복사 실패 했습니다`, err);
+    }
+  }
+
+  function makeDateGroupCopyText(group) {
+    const dateText = getDateGroupCopyDateText(group);
+    const items = [...(group.items || [])].sort(compareSongIdAsc);
+    const hasAnyTimeline = items.some(song => String(song.timeline || "").trim());
+    const lines = [`[${dateText}]`];
+
+    items.forEach(song => {
+      const artist = String(song.artist || "").trim() || getDisplayArtist(song);
+      const title = String(song.title || "").trim() || getDisplayTitle(song);
+      const timeline = hasAnyTimeline ? formatTimelineForCopy(song.timeline) : "";
+      const prefix = timeline ? `${timeline} ` : "";
+      lines.push(`${prefix}${artist} - ${title}`);
+    });
+
+    return lines.join("\n");
+  }
+
+  function getDateGroupCopyDateText(group) {
+    const first = group && Array.isArray(group.items) ? group.items[0] : null;
+    if (first) return formatPlainDate(first);
+
+    const rawKey = String(group && group.key || "");
+    const match = rawKey.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[1]}.${match[2]}.${match[3]}` : rawKey;
+  }
+
+  function compareSongIdAsc(a, b) {
+    return String(a && a.id || "").localeCompare(String(b && b.id || ""), "ko", {
+      numeric: true,
+      sensitivity: "base"
+    });
+  }
+
+  function formatTimelineForCopy(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+
+    const colonParts = text.split(":").map(part => Number(part));
+    if (colonParts.length >= 1 && colonParts.length <= 3 && colonParts.every(Number.isFinite)) {
+      let h = 0;
+      let m = 0;
+      let s = 0;
+
+      if (colonParts.length === 3) {
+        [h, m, s] = colonParts;
+      } else if (colonParts.length === 2) {
+        [m, s] = colonParts;
+      } else {
+        [s] = colonParts;
+      }
+
+      return secondsToHmsForCopy(h * 3600 + m * 60 + s);
+    }
+
+    const parsed = timelineToSeconds(text);
+    if (parsed > 0 || /^0+s?$/i.test(text)) return secondsToHmsForCopy(parsed);
+
+    return text;
+  }
+
+  function secondsToHmsForCopy(totalSeconds) {
+    const total = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  async function writeTextToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+
+    try {
+      const ok = document.execCommand("copy");
+      if (!ok) throw new Error("document.execCommand('copy') returned false");
+    } finally {
+      textarea.remove();
+    }
+  }
+
   function getDateGroupsBySortMode(songs) {
     const sortedSongs = [...songs].sort(dateSortMode === "asc" ? compareDateAsc : compareDateDesc);
     const groups = groupByDate(sortedSongs);
@@ -1147,6 +1315,7 @@
     bindLikeButtons(els.sungList);
     bindYoutubeButtons(els.sungList);
     bindFilterButtons(els.sungList);
+    bindPlaylistAddButtons(els.sungList);
     bindDateGroupToggles(els.sungList, "sung");
     bindSungMoreButton();
   }
@@ -1160,6 +1329,7 @@
     bindLikeButtons(body);
     bindYoutubeButtons(body);
     bindFilterButtons(body);
+    bindPlaylistAddButtons(body);
   }
 
   function bindSungMoreButton() {
@@ -1314,6 +1484,16 @@
     });
   }
 
+  function bindPlaylistAddButtons(root) {
+    root.querySelectorAll("[data-playlist-add-id]").forEach(button => {
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        handlePlaylistAddButton(button);
+      });
+    });
+  }
+
   function bindFilterButtons(root) {
     root.querySelectorAll("[data-filter-type]").forEach(button => {
       button.addEventListener("click", event => {
@@ -1347,6 +1527,15 @@
           }
         }
       });
+
+      if (namespace === "date") {
+        button.addEventListener("contextmenu", event => {
+          if (!isDesktopContextCopyEnabled()) return;
+          event.preventDefault();
+          const key = button.dataset.dateGroupToggle || "";
+          copyDateGroupInfoToClipboard(key);
+        });
+      }
     });
   }
 
@@ -1475,6 +1664,38 @@
       : `${buttonHtml}${countsHtml}`;
   }
 
+  function renderPlaylistAddButton(song, options = {}) {
+    const enabled = canAddSongToPlaylist(song);
+    const reason = getPlaylistAddDisabledReason(song);
+    const title = enabled ? "현재 플레이리스트에 추가" : reason;
+    const extraClass = options.modal ? " modal-playlist-add-button" : "";
+
+    return `<button class="playlist-add-button${enabled ? "" : " disabled disabled-front"}${extraClass}" type="button" data-playlist-add-id="${escapeHtml(song.id)}" data-playlist-disabled="${enabled ? "" : "1"}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></button>`;
+  }
+
+  function canAddSongToPlaylist(song) {
+    if (!song) return false;
+    const link = String(song.link || "").trim();
+    const timeline = String(song.timeline || "").trim();
+    const end = String(song.end || "").trim();
+    if (!link || !timeline || !end) return false;
+    const startSeconds = timelineToSeconds(timeline);
+    const endSeconds = timelineToSeconds(end);
+    return Boolean(extractYoutubeVideoId(link)) && endSeconds > startSeconds;
+  }
+
+  function getPlaylistAddDisabledReason(song) {
+    if (!song) return "플레이리스트에 추가할 수 없습니다";
+    if (!String(song.link || "").trim()) return "다시보기 링크가 없어 플레이리스트에 추가할 수 없습니다";
+    if (!String(song.timeline || "").trim()) return "시작 시간이 없어 플레이리스트에 추가할 수 없습니다";
+    if (!String(song.end || "").trim()) return "끝 시간이 없어 플레이리스트에 추가할 수 없습니다";
+    const startSeconds = timelineToSeconds(song.timeline);
+    const endSeconds = timelineToSeconds(song.end);
+    if (!extractYoutubeVideoId(song.link)) return "YouTube 영상만 플레이리스트에 추가할 수 있습니다";
+    if (!(endSeconds > startSeconds)) return "끝 시간이 시작 시간보다 커야 합니다";
+    return "플레이리스트에 추가할 수 없습니다";
+  }
+
   function renderSubLinks(song) {
     const subs = [
       { key: "sub1", label: "①" },
@@ -1522,6 +1743,7 @@
     const countryBadgesHtml = renderMultiValueBadges(getCountryValues(song), "country", "", "미분류");
 
     const likeButtonHtml = renderLikeControls(song, liked);
+    const playlistButtonHtml = renderPlaylistAddButton(song);
 
     return `
       <article class="song-card" data-id="${escapeHtml(song.id)}">
@@ -1539,6 +1761,7 @@
         </div>
         <div class="like-panel">
           ${likeButtonHtml}
+          ${playlistButtonHtml}
         </div>
       </article>
     `;
@@ -1867,17 +2090,49 @@
 
 
   function updateModalLikePanel(id = currentModalSongId) {
-    if (!els.modalLikePanel) return;
     const song = findSongById(id);
+    const isPlaylistMode = Boolean(playlistPlayback && playlistPlayback.active);
+
     if (!song) {
-      els.modalLikePanel.innerHTML = "";
+      if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
+      if (els.modalFooterLikePanel) els.modalFooterLikePanel.innerHTML = "";
+      if (els.modalFooterPlaylistPanel) els.modalFooterPlaylistPanel.innerHTML = "";
       return;
     }
-    els.modalLikePanel.innerHTML = renderLikeControls(song, isLocallyLiked(song.id), true);
-    bindLikeButtons(els.modalLikePanel);
+
+    if (els.modalLikePanel) {
+      els.modalLikePanel.innerHTML = isPlaylistMode
+        ? `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}</div>`
+        : `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}${renderPlaylistAddButton(song, { modal: true })}</div>`;
+      bindLikeButtons(els.modalLikePanel);
+      if (!isPlaylistMode) bindPlaylistAddButtons(els.modalLikePanel);
+    }
+
+    if (els.modalFooterLikePanel) {
+      els.modalFooterLikePanel.innerHTML = renderLikeControls(song, isLocallyLiked(song.id), false);
+      bindLikeButtons(els.modalFooterLikePanel);
+    }
+
+    if (els.modalFooterPlaylistPanel) {
+      els.modalFooterPlaylistPanel.innerHTML = isPlaylistMode ? "" : renderPlaylistAddButton(song, { modal: true });
+      bindPlaylistAddButtons(els.modalFooterPlaylistPanel);
+    }
+  }
+
+  function setModalFooterText(text) {
+    const value = String(text || "");
+    if (els.modalSongFooterText) {
+      els.modalSongFooterText.textContent = value;
+    } else if (els.modalSongFooter) {
+      els.modalSongFooter.textContent = value;
+    }
   }
 
   function openYoutubeModal(url, meta = {}) {
+    playlistPlayback = null;
+    clearPlaylistSegmentWatcher_();
+    clearPlaylistSkipTimer_();
+    renderPlaylistPlaybackUi_();
     const videoId = extractYoutubeVideoId(url);
 
     if (!videoId) {
@@ -1893,7 +2148,7 @@
     currentModalSongId = meta.id || "";
     els.modalSongTitle.textContent = meta.title || "";
     els.modalSongArtist.textContent = meta.artist || "";
-    els.modalSongFooter.textContent = [meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ ");
+    setModalFooterText([meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ "));
     updateModalLikePanel(currentModalSongId);
 
     els.youtubeFrameWrap.innerHTML = `<div id="youtubePlayerMount" class="youtube-player-mount"></div>`;
@@ -1921,10 +2176,19 @@
     hideYoutubeLoading(true);
     els.modalSongTitle.textContent = "";
     els.modalSongArtist.textContent = "";
-    els.modalSongFooter.textContent = "";
+    setModalFooterText("");
     currentModalSongId = "";
+    clearPlaylistSegmentWatcher_();
+    clearPlaylistVolumeFade_();
+    playlistPlayback = null;
+    renderPlaylistPlaybackUi_();
     if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
-    document.body.classList.remove("modal-open");
+    if (els.modalFooterLikePanel) els.modalFooterLikePanel.innerHTML = "";
+    if (els.modalFooterPlaylistPanel) els.modalFooterPlaylistPanel.innerHTML = "";
+    if (
+      (!els.playlistModal || els.playlistModal.hidden) &&
+      (!els.likeDisabledModal || els.likeDisabledModal.hidden)
+    ) document.body.classList.remove("modal-open");
   }
 
   function ensureYouTubeIframeApi_() {
@@ -1972,7 +2236,7 @@
     return youtubeApiReadyPromise;
   }
 
-  function createYoutubePlayer_(videoId, startSeconds, token) {
+  function createYoutubePlayer_(videoId, startSeconds, token, endSeconds = 0) {
     const mount = document.getElementById("youtubePlayerMount");
     if (!mount) return;
 
@@ -1995,6 +2259,13 @@
         onReady: event => {
           if (!isCurrentYoutubeToken_(token)) return;
           try {
+            if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
+              try {
+                const currentVolume = Number(event.target.getVolume && event.target.getVolume());
+                if (Number.isFinite(currentVolume) && currentVolume > 0) playlistPlayback.baseVolume = currentVolume;
+              } catch {}
+              event.target.setVolume(0);
+            }
             event.target.playVideo();
           } catch (err) {
             console.warn("YouTube 자동 재생 요청 실패", err);
@@ -2016,6 +2287,8 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
+        if (playlistPlayback && playlistPlayback.active) startPlaylistVolumeFadeIn_();
+        startPlaylistSegmentWatcher_();
         break;
       case YT.PlayerState.BUFFERING:
         if (youtubeStartedPlaying) scheduleYoutubeBufferingStatus_(token);
@@ -2032,6 +2305,9 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
+        if (playlistPlayback && playlistPlayback.active) {
+          playNextPlaylistItem_("ended");
+        }
         break;
       default:
         break;
@@ -2044,10 +2320,16 @@
     const code = event && typeof event.data !== "undefined" ? event.data : "unknown";
     console.warn("YouTube 플레이어 오류", { code });
     showYoutubeLoadingMessage("영상 재생에 문제가 생겼습니다.", { error: true });
+    if (playlistPlayback && playlistPlayback.active) {
+      schedulePlaylistSkipAfterError_();
+    }
   }
 
   function destroyYoutubePlayer_(clearFrame = true) {
     clearYoutubeLoadingTimers_();
+    clearPlaylistSkipTimer_();
+    clearPlaylistSegmentWatcher_();
+    clearPlaylistVolumeFade_();
 
     if (youtubePlayer) {
       try {
@@ -2087,7 +2369,11 @@
           showYoutubeLoadingMessage("영상이 응답하지 않아 팝업을 닫을게요…", { error: true });
           youtubeNoResponseTimer = window.setTimeout(() => {
             if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
-            closeYoutubeModal();
+            if (playlistPlayback && playlistPlayback.active) {
+              playNextPlaylistItem_("no_response");
+            } else {
+              closeYoutubeModal();
+            }
           }, YOUTUBE_NO_RESPONSE_NOTICE_MS);
         }, YOUTUBE_NO_RESPONSE_CLOSE_MS);
       }, YOUTUBE_SLOW_SECOND_MESSAGE_MS);
@@ -2992,7 +3278,661 @@
     if (!els.likeDisabledModal) return;
     window.clearTimeout(likeDisabledModalTimer);
     els.likeDisabledModal.hidden = true;
-    if (els.youtubeModal && els.youtubeModal.hidden) document.body.classList.remove("modal-open");
+    if (
+      els.youtubeModal && els.youtubeModal.hidden &&
+      (!els.playlistModal || els.playlistModal.hidden)
+    ) document.body.classList.remove("modal-open");
+  }
+
+  function loadPlaylists() {
+    try {
+      const raw = localStorage.getItem(PLAYLIST_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      playlists = Array.isArray(parsed) ? parsed.map(normalizePlaylist_).filter(Boolean) : [];
+    } catch (err) {
+      console.warn("[플레이리스트 로딩 실패]", err);
+      playlists = [];
+    }
+
+    if (!playlists.length) {
+      playlists = [{ id: makePlaylistId_(), name: DEFAULT_PLAYLIST_NAME, items: [] }];
+      selectedPlaylistId = playlists[0].id;
+      savePlaylists();
+      return;
+    }
+
+    selectedPlaylistId = String(localStorage.getItem(PLAYLIST_SELECTED_KEY) || "");
+    if (!playlists.some(list => list.id === selectedPlaylistId)) {
+      selectedPlaylistId = playlists[0] ? playlists[0].id : "";
+      writeSelectedPlaylistId_();
+    }
+  }
+
+  function normalizePlaylist_(list) {
+    if (!list || typeof list !== "object") return null;
+    const id = String(list.id || "").trim() || makePlaylistId_();
+    const name = String(list.name || "").trim() || "새 플레이리스트";
+    const seen = new Set();
+    const items = Array.isArray(list.items)
+      ? list.items.map(value => String(value || "").trim()).filter(Boolean).filter(value => {
+          if (seen.has(value)) return false;
+          seen.add(value);
+          return true;
+        })
+      : [];
+    return { id, name, items };
+  }
+
+  function savePlaylists() {
+    try {
+      localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify(playlists));
+      writeSelectedPlaylistId_();
+    } catch (err) {
+      console.warn("[플레이리스트 저장 실패]", err);
+      showLikeNoticeModal("[알림]", "플레이리스트 저장에 실패했습니다.");
+    }
+  }
+
+  function writeSelectedPlaylistId_() {
+    try {
+      if (selectedPlaylistId) localStorage.setItem(PLAYLIST_SELECTED_KEY, selectedPlaylistId);
+      else localStorage.removeItem(PLAYLIST_SELECTED_KEY);
+    } catch {}
+  }
+
+  function makePlaylistId_() {
+    return `pl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function getSelectedPlaylist() {
+    return playlists.find(list => list.id === selectedPlaylistId) || null;
+  }
+
+  function renderPlaylistSummary() {
+    const selected = getSelectedPlaylist();
+    if (els.playlistSummaryName) {
+      els.playlistSummaryName.textContent = selected ? selected.name : "플레이리스트 없음";
+    }
+  }
+
+  function renderPlaylistManager() {
+    renderPlaylistSummary();
+    if (!els.playlistSelect) return;
+
+    els.playlistSelect.innerHTML = playlists.map(list => `
+      <option value="${escapeHtml(list.id)}" ${list.id === selectedPlaylistId ? "selected" : ""}>${escapeHtml(list.name)} (${list.items.length})</option>
+    `).join("");
+
+    const selected = getSelectedPlaylist();
+    if (els.playlistNameInput) els.playlistNameInput.value = selected ? selected.name : "";
+
+    if (els.playlistEmpty) els.playlistEmpty.hidden = Boolean(selected && selected.items.length);
+
+    if (!els.playlistItems) return;
+    if (!selected || !selected.items.length) {
+      els.playlistItems.innerHTML = "";
+      updatePlaylistBulkButtons_();
+      return;
+    }
+
+    els.playlistItems.innerHTML = selected.items.map((id, index) => {
+      const song = findSongById(id);
+      const title = song ? getDisplayTitle(song) : id;
+      const artist = song ? getDisplayArtist(song) : "알 수 없는 아티스트";
+      const date = song ? formatSongDateIso_(song) : "";
+      const time = song ? [song.timeline || "", song.end || ""].filter(Boolean).join(" ~ ") : "";
+      const meta = [artist, date, time].filter(Boolean).join(" · ");
+      return `
+        <div class="playlist-item-row" draggable="true" data-playlist-item-id="${escapeHtml(id)}" data-playlist-item-index="${index}">
+          <label class="playlist-item-check-wrap" title="선택">
+            <input class="playlist-item-check" type="checkbox" data-playlist-check-id="${escapeHtml(id)}" aria-label="선택" />
+          </label>
+          <div class="playlist-item-main">
+            <strong>${index + 1}. ${escapeHtml(title)}</strong>
+            <span>${escapeHtml(meta)}</span>
+          </div>
+          <div class="playlist-item-mobile-move" aria-label="모바일 순서 변경">
+            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(id)}" data-playlist-move-step="-1" ${index === 0 ? "disabled" : ""} aria-label="위로 이동">↑</button>
+            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(id)}" data-playlist-move-step="1" ${index === selected.items.length - 1 ? "disabled" : ""} aria-label="아래로 이동">↓</button>
+          </div>
+          <button class="playlist-item-remove" type="button" data-playlist-remove-id="${escapeHtml(id)}" aria-label="삭제">×</button>
+        </div>
+      `;
+    }).join("");
+
+    bindPlaylistItemRowEvents_();
+    updatePlaylistBulkButtons_();
+  }
+
+  function bindPlaylistItemRowEvents_() {
+    if (!els.playlistItems) return;
+
+    els.playlistItems.querySelectorAll("[data-playlist-remove-id]").forEach(button => {
+      button.addEventListener("click", () => {
+        removeSongFromSelectedPlaylist(button.dataset.playlistRemoveId || "");
+      });
+    });
+
+    els.playlistItems.querySelectorAll("[data-playlist-check-id]").forEach(input => {
+      input.addEventListener("change", updatePlaylistBulkButtons_);
+      input.addEventListener("click", event => event.stopPropagation());
+    });
+
+    els.playlistItems.querySelectorAll("[data-playlist-move-id]").forEach(button => {
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const id = String(button.dataset.playlistMoveId || "").trim();
+        const step = Number(button.dataset.playlistMoveStep || 0);
+        moveSelectedPlaylistItemByStep_(id, step);
+      });
+    });
+
+    els.playlistItems.querySelectorAll(".playlist-item-row").forEach(row => {
+      row.addEventListener("dragstart", event => {
+        const target = event.target;
+        if (target && target.closest && target.closest("button,input,label")) {
+          event.preventDefault();
+          return;
+        }
+        row.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", row.dataset.playlistItemId || "");
+      });
+
+      row.addEventListener("dragend", () => {
+        row.classList.remove("dragging");
+        els.playlistItems.querySelectorAll(".playlist-item-row.drag-over").forEach(item => item.classList.remove("drag-over"));
+      });
+
+      row.addEventListener("dragover", event => {
+        event.preventDefault();
+        row.classList.add("drag-over");
+        event.dataTransfer.dropEffect = "move";
+      });
+
+      row.addEventListener("dragleave", () => {
+        row.classList.remove("drag-over");
+      });
+
+      row.addEventListener("drop", event => {
+        event.preventDefault();
+        row.classList.remove("drag-over");
+        const fromId = event.dataTransfer.getData("text/plain");
+        const toId = row.dataset.playlistItemId || "";
+        reorderSelectedPlaylistItem_(fromId, toId);
+      });
+    });
+  }
+
+  function updatePlaylistBulkButtons_() {
+    const selected = getSelectedPlaylist();
+    const checkedCount = els.playlistItems
+      ? els.playlistItems.querySelectorAll("[data-playlist-check-id]:checked").length
+      : 0;
+
+    if (els.playlistRemoveSelectedButton) {
+      els.playlistRemoveSelectedButton.disabled = checkedCount === 0;
+      els.playlistRemoveSelectedButton.textContent = checkedCount ? `선택삭제 (${checkedCount})` : "선택삭제";
+    }
+
+    if (els.playlistClearButton) {
+      els.playlistClearButton.disabled = !(selected && selected.items.length);
+    }
+  }
+
+  function getCheckedPlaylistItemIds_() {
+    if (!els.playlistItems) return [];
+    return Array.from(els.playlistItems.querySelectorAll("[data-playlist-check-id]:checked"))
+      .map(input => String(input.dataset.playlistCheckId || "").trim())
+      .filter(Boolean);
+  }
+
+  function reorderSelectedPlaylistItem_(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return;
+    const selected = getSelectedPlaylist();
+    if (!selected) return;
+    const fromIndex = selected.items.indexOf(fromId);
+    const toIndex = selected.items.indexOf(toId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const [item] = selected.items.splice(fromIndex, 1);
+    selected.items.splice(toIndex, 0, item);
+    savePlaylists();
+    renderPlaylistManager();
+  }
+
+  function moveSelectedPlaylistItemByStep_(id, step) {
+    const selected = getSelectedPlaylist();
+    const itemId = String(id || "").trim();
+    const direction = Number(step || 0);
+
+    if (!selected || !itemId || !direction) return;
+
+    const fromIndex = selected.items.indexOf(itemId);
+    const toIndex = fromIndex + direction;
+
+    if (fromIndex < 0 || toIndex < 0 || toIndex >= selected.items.length) return;
+
+    const [item] = selected.items.splice(fromIndex, 1);
+    selected.items.splice(toIndex, 0, item);
+    savePlaylists();
+    renderPlaylistManager();
+  }
+
+  function removeSelectedPlaylistItems_() {
+    const selected = getSelectedPlaylist();
+    if (!selected) return;
+    const ids = getCheckedPlaylistItemIds_();
+    if (!ids.length) return;
+    if (!window.confirm(`선택한 ${ids.length}곡을 플레이리스트에서 삭제할까요?`)) return;
+    const removeSet = new Set(ids);
+    selected.items = selected.items.filter(id => !removeSet.has(id));
+    savePlaylists();
+    renderPlaylistManager();
+  }
+
+  function clearSelectedPlaylistItems_() {
+    const selected = getSelectedPlaylist();
+    if (!selected || !selected.items.length) return;
+    if (!window.confirm(`${selected.name}의 모든 곡을 삭제할까요?`)) return;
+    selected.items = [];
+    savePlaylists();
+    renderPlaylistManager();
+  }
+
+  function formatSongDateIso_(song) {
+    if (!song) return "";
+    const year = Number(song.year || 0);
+    const month = Number(song.month || 0);
+    const day = Number(song.day || 0);
+    if (!year || !month || !day) return "";
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  function bindPlaylistManagerEvents() {
+    if (els.playlistOpenButton) {
+      els.playlistOpenButton.addEventListener("click", openPlaylistModal);
+    }
+
+    if (els.playlistModal) {
+      els.playlistModal.addEventListener("click", event => {
+        if (event.target === els.playlistModal) closePlaylistModal();
+      });
+    }
+
+    if (els.playlistModalClose) {
+      els.playlistModalClose.addEventListener("click", closePlaylistModal);
+    }
+
+    if (els.playlistCreateButton) {
+      els.playlistCreateButton.addEventListener("click", () => {
+        const name = String(els.playlistNameInput && els.playlistNameInput.value || "").trim() || `플레이리스트 ${playlists.length + 1}`;
+        const list = { id: makePlaylistId_(), name, items: [] };
+        playlists.push(list);
+        selectedPlaylistId = list.id;
+        savePlaylists();
+        renderPlaylistManager();
+        showCooldownText(`플레이리스트 생성: ${name}`);
+      });
+    }
+
+    if (els.playlistSelect) {
+      els.playlistSelect.addEventListener("change", () => {
+        selectedPlaylistId = els.playlistSelect.value || "";
+        savePlaylists();
+        renderPlaylistManager();
+      });
+    }
+
+    if (els.playlistRenameButton) {
+      els.playlistRenameButton.addEventListener("click", () => {
+        const selected = getSelectedPlaylist();
+        if (!selected) return;
+        const name = String(els.playlistNameInput && els.playlistNameInput.value || "").trim();
+        if (!name) {
+          showLikeNoticeModal("[알림]", "플레이리스트 이름을 입력해주세요.");
+          return;
+        }
+        selected.name = name;
+        savePlaylists();
+        renderPlaylistManager();
+      });
+    }
+
+    if (els.playlistDeleteButton) {
+      els.playlistDeleteButton.addEventListener("click", () => {
+        const selected = getSelectedPlaylist();
+        if (!selected) return;
+        if (!window.confirm(`${selected.name} 플레이리스트를 삭제할까요?`)) return;
+        playlists = playlists.filter(list => list.id !== selected.id);
+        selectedPlaylistId = playlists[0] ? playlists[0].id : "";
+        savePlaylists();
+        renderPlaylistManager();
+      });
+    }
+
+    if (els.playlistRemoveSelectedButton) {
+      els.playlistRemoveSelectedButton.addEventListener("click", removeSelectedPlaylistItems_);
+    }
+
+    if (els.playlistClearButton) {
+      els.playlistClearButton.addEventListener("click", clearSelectedPlaylistItems_);
+    }
+
+    if (els.playlistPlaySequentialButton) {
+      els.playlistPlaySequentialButton.addEventListener("click", () => startPlaylistPlayback("sequential"));
+    }
+
+    if (els.playlistPlayRandomButton) {
+      els.playlistPlayRandomButton.addEventListener("click", () => startPlaylistPlayback("random"));
+    }
+
+    if (els.playlistRepeatToggle) {
+      els.playlistRepeatToggle.addEventListener("click", () => {
+        const repeat = els.playlistRepeatToggle.dataset.repeat !== "1";
+        els.playlistRepeatToggle.dataset.repeat = repeat ? "1" : "0";
+        els.playlistRepeatToggle.textContent = repeat ? "전체 반복" : "반복 안함";
+      });
+    }
+  }
+
+  function bindPlaylistPlayerEvents() {
+    if (els.playlistPrevTrackButton) els.playlistPrevTrackButton.addEventListener("click", () => playPreviousPlaylistItem_());
+    if (els.playlistNextTrackButton) els.playlistNextTrackButton.addEventListener("click", () => playNextPlaylistItem_("manual"));
+    if (els.playlistShowListButton) els.playlistShowListButton.addEventListener("click", openPlaylistModal);
+    if (els.playlistOrderToggleButton) {
+      els.playlistOrderToggleButton.addEventListener("click", () => {
+        if (!playlistPlayback) return;
+        const nextMode = playlistPlayback.mode === "random" ? "sequential" : "random";
+        const currentSongId = playlistPlayback.queue[playlistPlayback.index];
+        playlistPlayback.mode = nextMode;
+        playlistPlayback.queue = buildPlaylistQueue_(playlistPlayback.list, nextMode);
+        const foundIndex = playlistPlayback.queue.indexOf(currentSongId);
+        playlistPlayback.index = foundIndex >= 0 ? foundIndex : 0;
+        renderPlaylistPlaybackUi_();
+      });
+    }
+    if (els.playlistRepeatPlayerToggle) {
+      els.playlistRepeatPlayerToggle.addEventListener("click", () => {
+        if (!playlistPlayback) return;
+        playlistPlayback.repeat = !playlistPlayback.repeat;
+        renderPlaylistPlaybackUi_();
+      });
+    }
+  }
+
+  function openPlaylistModal() {
+    renderPlaylistManager();
+    if (!els.playlistModal) return;
+    els.playlistModal.hidden = false;
+    document.body.classList.add("modal-open");
+  }
+
+  function closePlaylistModal() {
+    if (!els.playlistModal) return;
+    els.playlistModal.hidden = true;
+    if (els.youtubeModal && els.youtubeModal.hidden && els.likeDisabledModal && els.likeDisabledModal.hidden) {
+      document.body.classList.remove("modal-open");
+    }
+  }
+
+  function handlePlaylistAddButton(button) {
+    const id = button.dataset.playlistAddId || "";
+    const song = findSongById(id);
+    addLikeClickFeedback(button);
+
+    if (button.dataset.playlistDisabled === "1" || !canAddSongToPlaylist(song)) {
+      showLikeNoticeModal("[알림]", getPlaylistAddDisabledReason(song));
+      return;
+    }
+
+    let selected = getSelectedPlaylist();
+    if (!selected) {
+      openPlaylistModal();
+      showLikeNoticeModal("[알림]", "먼저 플레이리스트를 생성하거나 선택해주세요.");
+      return;
+    }
+
+    if (selected.items.includes(id)) {
+      showCooldownText("이미 플레이리스트에 포함된 곡입니다.");
+      return;
+    }
+
+    selected.items.push(id);
+    savePlaylists();
+    renderPlaylistSummary();
+    renderPlaylistManager();
+    addLikeClickFeedback(button);
+    showCooldownText(`${getDisplayTitle(song)} 곡을 ${selected.name}에 추가했습니다.`);
+    openPlaylistModal();
+  }
+
+  function removeSongFromSelectedPlaylist(id) {
+    const selected = getSelectedPlaylist();
+    if (!selected) return;
+    selected.items = selected.items.filter(itemId => itemId !== id);
+    savePlaylists();
+    renderPlaylistManager();
+  }
+
+  function startPlaylistPlayback(mode = "sequential") {
+    const selected = getSelectedPlaylist();
+    if (!selected || !selected.items.length) {
+      showLikeNoticeModal("[알림]", "재생할 곡이 있는 플레이리스트를 선택해주세요.");
+      openPlaylistModal();
+      return;
+    }
+
+    const validItems = selected.items.filter(id => canAddSongToPlaylist(findSongById(id)));
+    if (!validItems.length) {
+      showLikeNoticeModal("[알림]", "재생 가능한 곡이 없습니다.");
+      return;
+    }
+
+    const playbackList = { ...selected, items: validItems };
+    const repeat = els.playlistRepeatToggle ? els.playlistRepeatToggle.dataset.repeat === "1" : false;
+    playlistPlayback = {
+      active: true,
+      list: playbackList,
+      mode,
+      repeat,
+      queue: buildPlaylistQueue_(playbackList, mode),
+      index: 0,
+      currentEnd: 0,
+      baseVolume: 100,
+      fadingOut: false
+    };
+
+    closePlaylistModal();
+    playPlaylistItemAt_(0);
+  }
+
+  function buildPlaylistQueue_(list, mode) {
+    const items = [...(list && list.items || [])];
+    return mode === "random" ? shuffleArray(items) : items;
+  }
+
+  function playPlaylistItemAt_(index) {
+    if (!playlistPlayback || !playlistPlayback.active) return;
+    clearPlaylistSegmentWatcher_();
+    clearPlaylistSkipTimer_();
+    clearPlaylistVolumeFade_();
+    playlistPlayback.fadingOut = false;
+
+    const songId = playlistPlayback.queue[index];
+    const song = findSongById(songId);
+
+    if (!song || !canAddSongToPlaylist(song)) {
+      playlistPlayback.index = index;
+      playNextPlaylistItem_("invalid");
+      return;
+    }
+
+    playlistPlayback.index = index;
+    playlistPlayback.currentEnd = timelineToSeconds(song.end);
+
+    const videoId = extractYoutubeVideoId(song.link);
+    const token = ++youtubePlayerToken;
+    youtubeStartedPlaying = false;
+
+    destroyYoutubePlayer_(false);
+    currentModalSongId = song.id;
+    els.modalSongTitle.textContent = getDisplayTitle(song);
+    els.modalSongArtist.textContent = String(song.artist || "").trim() || getDisplayArtist(song);
+    setModalFooterText([formatSongDate(song), song.timeline || ""].filter(Boolean).join(" ／ "));
+    updateModalLikePanel(currentModalSongId);
+    renderPlaylistPlaybackUi_();
+
+    els.youtubeFrameWrap.innerHTML = `<div id="youtubePlayerMount" class="youtube-player-mount"></div>`;
+    els.youtubeModal.hidden = false;
+    document.body.classList.add("modal-open");
+    showYoutubeLoading();
+    scheduleYoutubeLoadingStatus_(token);
+
+    ensureYouTubeIframeApi_()
+      .then(() => {
+        if (!isCurrentYoutubeToken_(token)) return;
+        createYoutubePlayer_(videoId, timelineToSeconds(song.timeline), token, playlistPlayback.currentEnd);
+      })
+      .catch(err => {
+        if (!isCurrentYoutubeToken_(token)) return;
+        console.error("[YouTube API 로딩 실패]", err);
+        showYoutubeLoadingMessage("YouTube 플레이어를 불러오지 못했습니다.", { error: true });
+        schedulePlaylistSkipAfterError_();
+      });
+  }
+
+  function playNextPlaylistItem_(reason = "next") {
+    if (!playlistPlayback || !playlistPlayback.active) return;
+    clearPlaylistSegmentWatcher_();
+    clearPlaylistSkipTimer_();
+
+    let nextIndex = playlistPlayback.index + 1;
+    if (nextIndex >= playlistPlayback.queue.length) {
+      if (!playlistPlayback.repeat) {
+        showYoutubeLoadingMessage("플레이리스트 재생이 끝났습니다.");
+        window.setTimeout(() => {
+          if (playlistPlayback && playlistPlayback.active) closeYoutubeModal();
+        }, 900);
+        return;
+      }
+      nextIndex = 0;
+      if (playlistPlayback.mode === "random") playlistPlayback.queue = buildPlaylistQueue_(playlistPlayback.list, "random");
+    }
+    playPlaylistItemAt_(nextIndex);
+  }
+
+  function playPreviousPlaylistItem_() {
+    if (!playlistPlayback || !playlistPlayback.active) return;
+    let prevIndex = playlistPlayback.index - 1;
+    if (prevIndex < 0) prevIndex = playlistPlayback.repeat ? playlistPlayback.queue.length - 1 : 0;
+    playPlaylistItemAt_(prevIndex);
+  }
+
+  function startPlaylistSegmentWatcher_() {
+    clearPlaylistSegmentWatcher_();
+    if (!playlistPlayback || !playlistPlayback.active || !playlistPlayback.currentEnd || !youtubePlayer) return;
+
+    playlistSegmentTimer = window.setInterval(() => {
+      if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.getCurrentTime !== "function") return;
+      let current = 0;
+      try { current = Number(youtubePlayer.getCurrentTime() || 0); } catch { return; }
+      const remaining = playlistPlayback.currentEnd - current;
+
+      if (remaining <= PLAYLIST_FADE_DURATION_MS / 1000 && remaining > 0.08 && !playlistPlayback.fadingOut) {
+        playlistPlayback.fadingOut = true;
+        startPlaylistVolumeFadeOut_(Math.max(240, remaining * 1000));
+      }
+
+      if (current >= playlistPlayback.currentEnd - 0.08) {
+        clearPlaylistSegmentWatcher_();
+        playNextPlaylistItem_("segment_end");
+      }
+    }, PLAYLIST_END_CHECK_INTERVAL_MS);
+  }
+
+  function startPlaylistVolumeFadeIn_() {
+    if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+    const target = Math.max(0, Math.min(100, Number(playlistPlayback.baseVolume) || 100));
+    runPlaylistVolumeFade_(0, target, PLAYLIST_FADE_DURATION_MS, t => 1 - Math.pow(1 - t, 3));
+  }
+
+  function startPlaylistVolumeFadeOut_(durationMs = PLAYLIST_FADE_DURATION_MS) {
+    if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+    let from = Math.max(0, Math.min(100, Number(playlistPlayback.baseVolume) || 100));
+    try {
+      const currentVolume = Number(youtubePlayer.getVolume && youtubePlayer.getVolume());
+      if (Number.isFinite(currentVolume)) from = currentVolume;
+    } catch {}
+    runPlaylistVolumeFade_(from, 0, durationMs, t => Math.pow(t, 3));
+  }
+
+  function runPlaylistVolumeFade_(from, to, durationMs, easing) {
+    clearPlaylistVolumeFade_();
+    if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+
+    const start = performance.now();
+    const duration = Math.max(120, Number(durationMs) || PLAYLIST_FADE_DURATION_MS);
+    const fromValue = Math.max(0, Math.min(100, Number(from) || 0));
+    const toValue = Math.max(0, Math.min(100, Number(to) || 0));
+
+    const tick = () => {
+      if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+      const elapsed = performance.now() - start;
+      const progress = Math.min(1, elapsed / duration);
+      const eased = typeof easing === "function" ? easing(progress) : progress;
+      const value = fromValue + (toValue - fromValue) * eased;
+      try { youtubePlayer.setVolume(Math.max(0, Math.min(100, Math.round(value)))); } catch { return; }
+
+      if (progress < 1) {
+        playlistVolumeFadeTimer = window.setTimeout(tick, 80);
+      } else {
+        playlistVolumeFadeTimer = null;
+      }
+    };
+
+    tick();
+  }
+
+  function clearPlaylistVolumeFade_() {
+    if (playlistVolumeFadeTimer) {
+      window.clearTimeout(playlistVolumeFadeTimer);
+      playlistVolumeFadeTimer = null;
+    }
+  }
+
+  function clearPlaylistSegmentWatcher_() {
+    if (playlistSegmentTimer) {
+      window.clearInterval(playlistSegmentTimer);
+      playlistSegmentTimer = null;
+    }
+  }
+
+  function schedulePlaylistSkipAfterError_() {
+    clearPlaylistSkipTimer_();
+    playlistSkipTimer = window.setTimeout(() => {
+      if (playlistPlayback && playlistPlayback.active) playNextPlaylistItem_("error");
+    }, PLAYLIST_ERROR_SKIP_MS);
+  }
+
+  function clearPlaylistSkipTimer_() {
+    if (playlistSkipTimer) {
+      window.clearTimeout(playlistSkipTimer);
+      playlistSkipTimer = null;
+    }
+  }
+
+  function renderPlaylistPlaybackUi_() {
+    const active = Boolean(playlistPlayback && playlistPlayback.active);
+    if (els.playlistPlaybackBanner) els.playlistPlaybackBanner.hidden = !active;
+    if (els.playlistPlayerControls) els.playlistPlayerControls.hidden = !active;
+    if (!active) return;
+
+    const listName = playlistPlayback.list && playlistPlayback.list.name || "플레이리스트";
+    const indexText = `${playlistPlayback.index + 1}/${playlistPlayback.queue.length}`;
+    if (els.playlistPlayerName) els.playlistPlayerName.textContent = `${listName} · ${indexText}`;
+    if (els.playlistOrderToggleButton) els.playlistOrderToggleButton.textContent = playlistPlayback.mode === "random" ? "랜덤재생" : "순차재생";
+    if (els.playlistRepeatPlayerToggle) els.playlistRepeatPlayerToggle.textContent = playlistPlayback.repeat ? "전체반복" : "반복안함";
   }
 
   function resetFilters() {

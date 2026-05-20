@@ -76,6 +76,10 @@
     </details>
 
     <section class="summary">
+      <div class="playlist-summary">
+        <button id="playlistOpenButton" class="playlist-open-button" type="button">플레이리스트</button>
+        <span id="playlistSummaryName" class="playlist-summary-name">플레이리스트 없음</span>
+      </div>
       <div class="summary-spacer" aria-hidden="true"></div>
       <div class="filter-active-status"><strong id="resultCount">0</strong>곡 필터 적용 중…</div>
     </section>
@@ -195,6 +199,9 @@
   <div id="youtubeModal" class="modal-overlay" hidden>
     <div class="modal-card" role="dialog" aria-modal="true" aria-label="YouTube 재생 팝업">
       <button id="youtubeModalClose" class="modal-close" type="button" aria-label="닫기">×</button>
+      <div id="playlistPlaybackBanner" class="playlist-playback-banner" hidden>
+        <span id="playlistPlayerName">플레이리스트</span>
+      </div>
       <div class="modal-song-info modal-song-info-top">
         <div class="modal-song-text">
           <div id="modalSongTitle" class="modal-song-title"></div>
@@ -204,7 +211,49 @@
       </div>
       <div id="youtubeFrameWrap" class="youtube-frame-wrap"></div>
       <div id="youtubeLoading" class="youtube-loading" hidden></div>
-      <div id="modalSongFooter" class="modal-song-info modal-song-info-bottom"></div>
+      <div id="playlistPlayerControls" class="playlist-player-controls" hidden>
+        <div class="playlist-player-controls-main">
+          <button id="playlistPrevTrackButton" type="button">이전곡</button>
+          <button id="playlistShowListButton" type="button">목록보기</button>
+          <button id="playlistNextTrackButton" type="button">다음곡</button>
+        </div>
+        <div class="playlist-player-controls-options">
+          <button id="playlistOrderToggleButton" type="button">순차재생</button>
+          <button id="playlistRepeatPlayerToggle" type="button">전체반복</button>
+        </div>
+      </div>
+      <div id="modalSongFooter" class="modal-song-info modal-song-info-bottom">
+        <div id="modalFooterLikePanel" class="modal-footer-side modal-footer-left"></div>
+        <div id="modalSongFooterText" class="modal-footer-text"></div>
+        <div id="modalFooterPlaylistPanel" class="modal-footer-side modal-footer-right"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlistModal" class="mini-modal-overlay playlist-modal-overlay" hidden>
+    <div class="playlist-modal-card" role="dialog" aria-modal="true" aria-label="플레이리스트 관리">
+      <button id="playlistModalClose" class="modal-close mini-modal-close" type="button" aria-label="닫기">×</button>
+      <h2>플레이리스트</h2>
+      <div class="playlist-editor-row">
+        <input id="playlistNameInput" type="text" placeholder="플레이리스트 이름" />
+        <button id="playlistCreateButton" type="button">생성</button>
+      </div>
+      <div class="playlist-editor-row">
+        <select id="playlistSelect" aria-label="플레이리스트 선택"></select>
+        <button id="playlistRenameButton" type="button">이름 변경</button>
+        <button id="playlistDeleteButton" type="button">삭제</button>
+      </div>
+      <div class="playlist-play-row">
+        <button id="playlistPlaySequentialButton" type="button">순차재생</button>
+        <button id="playlistPlayRandomButton" type="button">랜덤재생</button>
+        <button id="playlistRepeatToggle" type="button" data-repeat="1">전체 반복</button>
+      </div>
+      <div id="playlistEmpty" class="empty playlist-empty">선택된 플레이리스트에 곡이 없습니다.</div>
+      <div class="playlist-bulk-row">
+        <button id="playlistRemoveSelectedButton" type="button" disabled>선택삭제</button>
+        <button id="playlistClearButton" type="button" disabled>전체삭제</button>
+      </div>
+      <div id="playlistItems" class="playlist-items"></div>
     </div>
   </div>
 
