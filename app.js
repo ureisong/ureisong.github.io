@@ -47,6 +47,42 @@
   const PLAYLIST_ERROR_SKIP_MS = 1600;
   const PLAYLIST_FADE_DURATION_MS = 2000;
   const DEFAULT_PLAYLIST_NAME = "기본";
+  const DEFAULT_PLAYLIST_SEED_ITEMS = [
+    {
+      type: "external",
+      key: "external:aHNedgujLXo",
+      url: "https://youtu.be/aHNedgujLXo",
+      videoId: "aHNedgujLXo",
+      title: "IRIS OUT / 米津玄師 - Urei Cover",
+      section: "커버곡"
+    },
+    "20251104_1_016", "20251021_1_013"
+    /*
+      완전히 처음 접속해서 localStorage에 플레이리스트 데이터가 없을 때만
+      기본 플레이리스트에 자동으로 넣을 항목 예시
+
+      일반 곡은 songs 시트의 id 문자열만
+      "20250101_1_001",
+
+      커버곡/추천 팬 영상처럼 songs 시트에 없는 YouTube 영상은 아래 형식으로
+      {
+        type: "external",
+        key: "external:cover-example-video-id",
+        url: "https://youtu.be/cover-example-video-id",
+        videoId: "cover-example-video-id",
+        title: "기본 커버곡 예시 제목",
+        section: "커버곡"
+      },
+      {
+        type: "external",
+        key: "external:rec-example-video-id",
+        url: "https://youtu.be/rec-example-video-id",
+        videoId: "rec-example-video-id",
+        title: "기본 추천 팬 영상 예시 제목",
+        section: "추천 팬 영상"
+      }
+    */
+  ];
 
   const els = {
     dataStatus: document.getElementById("dataStatus"),
@@ -214,6 +250,7 @@
     showPageLoading("...LOADING...", "설정 불러오는 중.....");
     await loadSearchAliases(false, currentSettingsRows);
     await loadData(false, currentSettingsRows);
+    handleInitialSongIdQuery_();
   }
   
   function bindResponsiveRender() {
@@ -1926,6 +1963,52 @@
     return allSongs.find(song => song.id === id) || filteredSongs.find(song => song.id === id) || null;
   }
 
+  function handleInitialSongIdQuery_() {
+    let requestedId = "";
+
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      requestedId = String(params.get("id") || "").trim();
+    } catch {
+      requestedId = "";
+    }
+
+    if (!requestedId) return;
+
+    clearInitialSongIdQuery_();
+
+    const song = findSongById(requestedId);
+    if (!song) {
+      showLikeNoticeModal("[알림]", `해당 곡을 찾을 수 없습니다.\n${requestedId}`);
+      return;
+    }
+
+    if (!String(song.link || "").trim()) {
+      showLikeNoticeModal("[알림]", `다시보기가 없는 곡입니다.\n${getDisplayTitle(song)}`);
+      return;
+    }
+
+    const youtubeUrl = makeTimelineLink(song.link, song.timeline);
+    window.setTimeout(() => {
+      openYoutubeModal(youtubeUrl, {
+        title: getDisplayTitle(song),
+        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        date: formatSongDate(song),
+        timeline: song.timeline || "",
+        id: song.id
+      });
+    }, 120);
+  }
+
+  function clearInitialSongIdQuery_() {
+    if (!window.history || typeof window.history.replaceState !== "function") return;
+
+    try {
+      const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.hash || ""}`;
+      window.history.replaceState(null, document.title, cleanUrl);
+    } catch {}
+  }
+
   function makeLikeLogLabel(song) {
     if (!song) return "알 수 없는 곡 - 알 수 없는 아티스트 (날짜 없음／시간 없음)";
     const titleText = getDisplayTitle(song);
@@ -2114,6 +2197,8 @@
       return;
     }
 
+    setExternalModalPanelsHidden_(false);
+
     if (els.modalLikePanel) {
       els.modalLikePanel.innerHTML = isPlaylistMode
         ? `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}</div>`
@@ -2139,6 +2224,25 @@
       els.modalSongFooterText.textContent = value;
     } else if (els.modalSongFooter) {
       els.modalSongFooter.textContent = value;
+    }
+  }
+
+
+  function setExternalModalPanelsHidden_(hidden) {
+    if (els.modalLikePanel) {
+      els.modalLikePanel.innerHTML = "";
+      els.modalLikePanel.hidden = Boolean(hidden);
+    }
+    if (els.modalFooterLikePanel) {
+      els.modalFooterLikePanel.innerHTML = "";
+      els.modalFooterLikePanel.hidden = Boolean(hidden);
+    }
+    if (els.modalFooterPlaylistPanel) {
+      els.modalFooterPlaylistPanel.innerHTML = "";
+      els.modalFooterPlaylistPanel.hidden = Boolean(hidden);
+    }
+    if (els.modalSongFooterText) {
+      els.modalSongFooterText.hidden = Boolean(hidden);
     }
   }
 
@@ -2294,25 +2398,32 @@
     return youtubeApiReadyPromise;
   }
 
-  function createYoutubePlayer_(videoId, startSeconds, token, endSeconds = 0) {
+  function createYoutubePlayer_(videoId, startSeconds, token, endSeconds = 0, options = {}) {
     const mount = document.getElementById("youtubePlayerMount");
     if (!mount) return;
 
     showYoutubeLoadingMessage(getCurrentYoutubeLoadingText_(), { preserveInitial: true });
 
+    const playerVars = {
+      autoplay: 1,
+      playsinline: 1,
+      rel: 0,
+      vq: "hd1080",
+      hd: 1,
+      start: Math.max(0, Number(startSeconds) || 0),
+      origin: window.location.origin
+    };
+
+    if (options && options.playlistId && !videoId) {
+      playerVars.listType = "playlist";
+      playerVars.list = options.playlistId;
+    }
+
     youtubePlayer = new YT.Player(mount, {
-      videoId,
+      videoId: videoId || undefined,
       width: "100%",
       height: "100%",
-      playerVars: {
-        autoplay: 1,
-        playsinline: 1,
-        rel: 0,
-        vq: "hd1080",
-        hd: 1,
-        start: Math.max(0, Number(startSeconds) || 0),
-        origin: window.location.origin
-      },
+      playerVars,
       events: {
         onReady: event => {
           if (!isCurrentYoutubeToken_(token)) return;
@@ -2972,7 +3083,7 @@
   function renderCoverCard(item) {
     const isCenter = item._slot === 0;
     return `
-      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}">
+      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="cover" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
         <div class="cover-thumb-wrap">
           <img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />
         </div>
@@ -2982,8 +3093,7 @@
   }
 
   function bindCoverCards() {
-    // v005: 좌/우 카드도 즉시 링크를 열어야 하므로 클릭 이동 처리 없음.
-    // 캐러셀 이동은 버튼, 휠, 드래그/스와이프로만 처리한다.
+    bindCarouselPlaylistAddCards_(els.coverTrack, "cover");
   }
 
   async function enrichCoverTitles(items) {
@@ -3134,7 +3244,7 @@
     const thumbClass = item.thumbnail ? "cover-thumb-wrap" : "cover-thumb-wrap cover-thumb-placeholder";
 
     return `
-      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" ${indexAttr}="${escapeHtml(item._actualIndex)}">
+      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" ${indexAttr}="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
         <div class="${thumbClass}">
           ${thumb}
         </div>
@@ -3144,8 +3254,7 @@
   }
 
   function bindRecCards() {
-    // v005: 좌/우 카드도 즉시 링크를 열어야 하므로 클릭 이동 처리 없음.
-    // 캐러셀 이동은 버튼, 휠, 드래그/스와이프로만 처리한다.
+    bindCarouselPlaylistAddCards_(els.recTrack, "rec");
   }
 
   async function enrichRecTitles(items) {
@@ -3199,6 +3308,78 @@
     if (recHover || recMoving) return false;
     if (recItems.length <= 1) return false;
     return isElementFullyVisible(els.recDetails);
+  }
+
+  function bindCarouselPlaylistAddCards_(root, fallbackKind) {
+    if (!root) return;
+
+    root.querySelectorAll(".cover-card[data-carousel-playlist-kind]").forEach(card => {
+      let longPressTimer = null;
+      let longPressTriggered = false;
+
+      card.addEventListener("contextmenu", event => {
+        if (!isDesktopContextCopyEnabled()) return;
+        event.preventDefault();
+        handleCarouselPlaylistAdd_(card, card.dataset.carouselPlaylistKind || fallbackKind);
+      });
+
+      card.addEventListener("touchstart", () => {
+        longPressTriggered = false;
+        if (!playlistEnabled) return;
+        longPressTimer = window.setTimeout(() => {
+          longPressTriggered = true;
+          handleCarouselPlaylistAdd_(card, card.dataset.carouselPlaylistKind || fallbackKind);
+        }, 700);
+      }, { passive: true });
+
+      ["touchend", "touchcancel", "touchmove"].forEach(type => {
+        card.addEventListener(type, event => {
+          if (longPressTimer) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          if (type === "touchend" && longPressTriggered) {
+            event.preventDefault();
+          }
+        }, { passive: false });
+      });
+
+      card.addEventListener("click", event => {
+        if (longPressTriggered) {
+          event.preventDefault();
+          longPressTriggered = false;
+        }
+      });
+    });
+  }
+
+  function handleCarouselPlaylistAdd_(card, kind) {
+    if (!playlistEnabled) return;
+
+    const entry = makeExternalPlaylistEntryFromCard_(card, kind);
+    if (!entry) {
+      showLikeNoticeModal("[알림]", "YouTube 영상만 플레이리스트에 추가할 수 있습니다.");
+      return;
+    }
+
+    const selected = getSelectedPlaylist();
+    if (!selected) {
+      openPlaylistModal();
+      showLikeNoticeModal("[알림]", "먼저 플레이리스트를 생성하거나 선택해주세요.");
+      return;
+    }
+
+    if (playlistHasItem_(selected, entry)) {
+      showCooldownText("이미 플레이리스트에 포함된 영상입니다.");
+      return;
+    }
+
+    selected.items.push(entry);
+    savePlaylists();
+    renderPlaylistSummary();
+    renderPlaylistManager();
+    showCooldownText(`${entry.title} 영상을 ${selected.name}에 추가했습니다.`);
+    openPlaylistModal();
   }
 
   function bindCarouselSwipe(element, moveFn) {
@@ -3380,7 +3561,7 @@
     }
 
     if (!playlists.length) {
-      playlists = [{ id: makePlaylistId_(), name: DEFAULT_PLAYLIST_NAME, items: [] }];
+      playlists = [{ id: makePlaylistId_(), name: DEFAULT_PLAYLIST_NAME, items: getDefaultPlaylistSeedItems_() }];
       selectedPlaylistId = playlists[0].id;
       savePlaylists();
       return;
@@ -3393,15 +3574,29 @@
     }
   }
 
+  function getDefaultPlaylistSeedItems_() {
+    const seen = new Set();
+    return (DEFAULT_PLAYLIST_SEED_ITEMS || [])
+      .map(normalizePlaylistItem_)
+      .filter(Boolean)
+      .filter(item => {
+        const key = getPlaylistItemKey_(item);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
   function normalizePlaylist_(list) {
     if (!list || typeof list !== "object") return null;
     const id = String(list.id || "").trim() || makePlaylistId_();
     const name = String(list.name || "").trim() || "새 플레이리스트";
     const seen = new Set();
     const items = Array.isArray(list.items)
-      ? list.items.map(value => String(value || "").trim()).filter(Boolean).filter(value => {
-          if (seen.has(value)) return false;
-          seen.add(value);
+      ? list.items.map(normalizePlaylistItem_).filter(Boolean).filter(value => {
+          const key = getPlaylistItemKey_(value);
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
           return true;
         })
       : [];
@@ -3433,6 +3628,111 @@
     return playlists.find(list => list.id === selectedPlaylistId) || null;
   }
 
+
+  function getPlaylistItemKey_(item) {
+    if (typeof item === "string") return `song:${item}`;
+    if (item && typeof item === "object") {
+      return String(item.key || item.id || item.url || "").trim();
+    }
+    return "";
+  }
+
+  function normalizePlaylistItem_(item) {
+    if (typeof item === "string") return item.trim();
+    if (!item || typeof item !== "object") return "";
+
+    const type = String(item.type || "").trim();
+    if (type !== "external") return String(item.id || "").trim();
+
+    const url = String(item.url || "").trim();
+    const videoId = String(item.videoId || extractYoutubeVideoId(url) || "").trim();
+    const playlistId = String(item.playlistId || extractYoutubePlaylistId(url) || "").trim();
+    const title = String(item.title || "YouTube 영상").trim();
+    const section = String(item.section || "외부 영상").trim();
+    const key = String(item.key || `external:${videoId || playlistId || url}`).trim();
+
+    if (!url || (!videoId && !playlistId)) return "";
+
+    return {
+      type: "external",
+      key,
+      url,
+      videoId,
+      playlistId,
+      title,
+      section
+    };
+  }
+
+  function playlistHasItem_(list, itemOrKey) {
+    if (!list || !Array.isArray(list.items)) return false;
+    const key = typeof itemOrKey === "string" && itemOrKey.includes(":")
+      ? itemOrKey
+      : getPlaylistItemKey_(itemOrKey);
+    if (!key) return false;
+    return list.items.some(item => getPlaylistItemKey_(item) === key);
+  }
+
+  function makeExternalPlaylistEntryFromCard_(card, kind) {
+    const url = String(card && card.href || "").trim();
+    const title = String(card && card.querySelector(".cover-title") && card.querySelector(".cover-title").textContent || "").trim()
+      || (kind === "rec" ? "추천 팬 영상" : "커버곡");
+    const section = kind === "rec" ? "추천 팬 영상" : "커버곡";
+    const videoId = extractYoutubeVideoId(url);
+    const playlistId = extractYoutubePlaylistId(url);
+
+    if (!url || (!videoId && !playlistId)) return null;
+
+    return {
+      type: "external",
+      key: `external:${videoId || playlistId || url}`,
+      url,
+      videoId,
+      playlistId,
+      title,
+      section
+    };
+  }
+
+  function getPlaylistPlayableItem_(item) {
+    if (typeof item === "string") {
+      const song = findSongById(item);
+      if (!song || !canAddSongToPlaylist(song)) return null;
+      return {
+        type: "song",
+        key: getPlaylistItemKey_(item),
+        song,
+        title: getDisplayTitle(song),
+        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        section: "",
+        url: song.link,
+        videoId: extractYoutubeVideoId(song.link),
+        playlistId: "",
+        start: timelineToSeconds(song.timeline),
+        end: timelineToSeconds(song.end),
+        hasSegment: true
+      };
+    }
+
+    const normalized = normalizePlaylistItem_(item);
+    if (!normalized || typeof normalized !== "object") return null;
+
+    return {
+      type: "external",
+      key: getPlaylistItemKey_(normalized),
+      song: null,
+      title: normalized.title || "YouTube 영상",
+      artist: normalized.section || "외부 영상",
+      section: normalized.section || "외부 영상",
+      url: normalized.url,
+      videoId: normalized.videoId || extractYoutubeVideoId(normalized.url),
+      playlistId: normalized.playlistId || extractYoutubePlaylistId(normalized.url),
+      start: 0,
+      end: 0,
+      hasSegment: false
+    };
+  }
+
   function renderPlaylistSummary() {
     const selected = getSelectedPlaylist();
     if (els.playlistSummaryName) {
@@ -3460,27 +3760,30 @@
       return;
     }
 
-    els.playlistItems.innerHTML = selected.items.map((id, index) => {
-      const song = findSongById(id);
-      const title = song ? getDisplayTitle(song) : id;
-      const artist = song ? getDisplayArtist(song) : "알 수 없는 아티스트";
-      const date = song ? formatSongDateIso_(song) : "";
-      const time = song ? [song.timeline || "", song.end || ""].filter(Boolean).join(" ~ ") : "";
-      const meta = [artist, date, time].filter(Boolean).join(" · ");
+    els.playlistItems.innerHTML = selected.items.map((item, index) => {
+      const playable = getPlaylistPlayableItem_(item);
+      const key = getPlaylistItemKey_(item);
+      const title = playable ? playable.title : key;
+      const meta = playable && playable.type === "song"
+        ? [getDisplayArtist(playable.song), formatSongDateIso_(playable.song), [playable.song.timeline || "", playable.song.end || ""].filter(Boolean).join(" ~ ")].filter(Boolean).join(" · ")
+        : playable
+          ? playable.section
+          : "재생할 수 없는 항목";
+
       return `
-        <div class="playlist-item-row" draggable="true" data-playlist-item-id="${escapeHtml(id)}" data-playlist-item-index="${index}">
+        <div class="playlist-item-row" draggable="true" data-playlist-item-id="${escapeHtml(key)}" data-playlist-item-index="${index}">
           <label class="playlist-item-check-wrap" title="선택">
-            <input class="playlist-item-check" type="checkbox" data-playlist-check-id="${escapeHtml(id)}" aria-label="선택" />
+            <input class="playlist-item-check" type="checkbox" data-playlist-check-id="${escapeHtml(key)}" aria-label="선택" />
           </label>
           <div class="playlist-item-main">
             <strong>${index + 1}. ${escapeHtml(title)}</strong>
             <span>${escapeHtml(meta)}</span>
           </div>
           <div class="playlist-item-mobile-move" aria-label="모바일 순서 변경">
-            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(id)}" data-playlist-move-step="-1" ${index === 0 ? "disabled" : ""} aria-label="위로 이동">↑</button>
-            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(id)}" data-playlist-move-step="1" ${index === selected.items.length - 1 ? "disabled" : ""} aria-label="아래로 이동">↓</button>
+            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(key)}" data-playlist-move-step="-1" ${index === 0 ? "disabled" : ""} aria-label="위로 이동">↑</button>
+            <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(key)}" data-playlist-move-step="1" ${index === selected.items.length - 1 ? "disabled" : ""} aria-label="아래로 이동">↓</button>
           </div>
-          <button class="playlist-item-remove" type="button" data-playlist-remove-id="${escapeHtml(id)}" aria-label="삭제">×</button>
+          <button class="playlist-item-remove" type="button" data-playlist-remove-id="${escapeHtml(key)}" aria-label="삭제">×</button>
         </div>
       `;
     }).join("");
@@ -3573,12 +3876,17 @@
       .filter(Boolean);
   }
 
+  function findPlaylistItemIndexByKey_(list, key) {
+    if (!list || !Array.isArray(list.items)) return -1;
+    return list.items.findIndex(item => getPlaylistItemKey_(item) === key);
+  }
+
   function reorderSelectedPlaylistItem_(fromId, toId) {
     if (!fromId || !toId || fromId === toId) return;
     const selected = getSelectedPlaylist();
     if (!selected) return;
-    const fromIndex = selected.items.indexOf(fromId);
-    const toIndex = selected.items.indexOf(toId);
+    const fromIndex = findPlaylistItemIndexByKey_(selected, fromId);
+    const toIndex = findPlaylistItemIndexByKey_(selected, toId);
     if (fromIndex < 0 || toIndex < 0) return;
     const [item] = selected.items.splice(fromIndex, 1);
     selected.items.splice(toIndex, 0, item);
@@ -3593,7 +3901,7 @@
 
     if (!selected || !itemId || !direction) return;
 
-    const fromIndex = selected.items.indexOf(itemId);
+    const fromIndex = findPlaylistItemIndexByKey_(selected, itemId);
     const toIndex = fromIndex + direction;
 
     if (fromIndex < 0 || toIndex < 0 || toIndex >= selected.items.length) return;
@@ -3611,7 +3919,7 @@
     if (!ids.length) return;
     if (!window.confirm(`선택한 ${ids.length}곡을 플레이리스트에서 삭제할까요?`)) return;
     const removeSet = new Set(ids);
-    selected.items = selected.items.filter(id => !removeSet.has(id));
+    selected.items = selected.items.filter(item => !removeSet.has(getPlaylistItemKey_(item)));
     savePlaylists();
     renderPlaylistManager();
   }
@@ -3813,10 +4121,10 @@
       els.playlistOrderToggleButton.addEventListener("click", () => {
         if (!playlistPlayback) return;
         const nextMode = playlistPlayback.mode === "random" ? "sequential" : "random";
-        const currentSongId = playlistPlayback.queue[playlistPlayback.index];
+        const currentItemKey = getPlaylistItemKey_(playlistPlayback.queue[playlistPlayback.index]);
         playlistPlayback.mode = nextMode;
         playlistPlayback.queue = buildPlaylistQueue_(playlistPlayback.list, nextMode);
-        const foundIndex = playlistPlayback.queue.indexOf(currentSongId);
+        const foundIndex = playlistPlayback.queue.findIndex(item => getPlaylistItemKey_(item) === currentItemKey);
         playlistPlayback.index = foundIndex >= 0 ? foundIndex : 0;
         renderPlaylistPlaybackUi_();
       });
@@ -3864,7 +4172,7 @@
       return;
     }
 
-    if (selected.items.includes(id)) {
+    if (playlistHasItem_(selected, `song:${id}`)) {
       showCooldownText("이미 플레이리스트에 포함된 곡입니다.");
       return;
     }
@@ -3881,7 +4189,8 @@
   function removeSongFromSelectedPlaylist(id) {
     const selected = getSelectedPlaylist();
     if (!selected) return;
-    selected.items = selected.items.filter(itemId => itemId !== id);
+    const key = String(id || "").includes(":") ? String(id || "") : `song:${id}`;
+    selected.items = selected.items.filter(item => getPlaylistItemKey_(item) !== key);
     savePlaylists();
     renderPlaylistManager();
   }
@@ -3895,7 +4204,7 @@
       return;
     }
 
-    const validItems = selected.items.filter(id => canAddSongToPlaylist(findSongById(id)));
+    const validItems = selected.items.filter(item => getPlaylistPlayableItem_(item));
     if (!validItems.length) {
       showLikeNoticeModal("[알림]", "재생 가능한 곡이 없습니다.");
       return;
@@ -3919,21 +4228,96 @@
     playPlaylistItemAt_(0);
   }
 
-  function buildPlaylistQueue_(list, mode, avoidFirstId = "") {
+  function buildPlaylistQueue_(list, mode, options = {}) {
     const items = [...(list && list.items || [])];
-    if (mode !== "random") return items;
+    if (mode !== "random" || items.length <= 1) return items;
 
-    const shuffled = shuffleArray(items);
-    if (avoidFirstId && shuffled.length > 1 && shuffled[0] === avoidFirstId) {
-      const swapIndex = shuffled.findIndex((id, index) => index > 0 && id !== avoidFirstId);
-      if (swapIndex > 0) {
-        const tmp = shuffled[0];
-        shuffled[0] = shuffled[swapIndex];
-        shuffled[swapIndex] = tmp;
+    const config = typeof options === "string"
+      ? { avoidFirstKey: options }
+      : (options || {});
+    const avoidFirstKey = String(config.avoidFirstKey || "").trim();
+    const previousQueue = Array.isArray(config.previousQueue) ? config.previousQueue : [];
+    const previousSignature = makePlaylistQueueSignature_(previousQueue);
+    const canHaveDifferentOrder = hasDifferentPlaylistQueueOrder_(items, previousQueue, avoidFirstKey);
+
+    let best = [];
+
+    for (let attempt = 0; attempt < 48; attempt += 1) {
+      const shuffled = enforcePlaylistQueueFirstKey_(shuffleArray(items), avoidFirstKey);
+      const signature = makePlaylistQueueSignature_(shuffled);
+
+      if (!best.length) best = shuffled;
+
+      if (canHaveDifferentOrder && signature !== previousSignature) {
+        return shuffled;
+      }
+
+      if (!canHaveDifferentOrder && (!avoidFirstKey || getPlaylistItemKey_(shuffled[0]) !== avoidFirstKey)) {
+        return shuffled;
       }
     }
 
-    return shuffled;
+    if (canHaveDifferentOrder) {
+      const alternative = makeDifferentPlaylistQueueOrder_(items, previousQueue, avoidFirstKey);
+      if (alternative.length) return alternative;
+    }
+
+    return best.length ? best : enforcePlaylistQueueFirstKey_(items, avoidFirstKey);
+  }
+
+  function makePlaylistQueueSignature_(queue) {
+    return (queue || []).map(getPlaylistItemKey_).join("\u001f");
+  }
+
+  function enforcePlaylistQueueFirstKey_(queue, avoidFirstKey) {
+    const arr = [...(queue || [])];
+    if (!avoidFirstKey || arr.length <= 1 || getPlaylistItemKey_(arr[0]) !== avoidFirstKey) {
+      return arr;
+    }
+
+    const swapIndex = arr.findIndex((item, index) => index > 0 && getPlaylistItemKey_(item) !== avoidFirstKey);
+    if (swapIndex > 0) {
+      [arr[0], arr[swapIndex]] = [arr[swapIndex], arr[0]];
+    }
+
+    return arr;
+  }
+
+  function hasDifferentPlaylistQueueOrder_(items, previousQueue, avoidFirstKey) {
+    const currentSignature = makePlaylistQueueSignature_(previousQueue);
+    if (!currentSignature || items.length <= 1) return false;
+
+    const uniqueKeys = [...new Set(items.map(getPlaylistItemKey_).filter(Boolean))];
+    if (uniqueKeys.length <= 1) return false;
+
+    if (uniqueKeys.length === 2 && avoidFirstKey) {
+      const onlyPossibleFirst = uniqueKeys.find(key => key !== avoidFirstKey);
+      const firstPrev = getPlaylistItemKey_(previousQueue[0]);
+      return onlyPossibleFirst !== firstPrev;
+    }
+
+    return true;
+  }
+
+  function makeDifferentPlaylistQueueOrder_(items, previousQueue, avoidFirstKey) {
+    const previousSignature = makePlaylistQueueSignature_(previousQueue);
+    const base = enforcePlaylistQueueFirstKey_(items, avoidFirstKey);
+
+    for (let shift = 1; shift < base.length; shift += 1) {
+      const rotated = enforcePlaylistQueueFirstKey_(base.slice(shift).concat(base.slice(0, shift)), avoidFirstKey);
+      if (makePlaylistQueueSignature_(rotated) !== previousSignature) return rotated;
+    }
+
+    for (let i = 0; i < base.length; i += 1) {
+      for (let j = i + 1; j < base.length; j += 1) {
+        const swapped = [...base];
+        [swapped[i], swapped[j]] = [swapped[j], swapped[i]];
+        const fixed = enforcePlaylistQueueFirstKey_(swapped, avoidFirstKey);
+        if (makePlaylistQueueSignature_(fixed) !== previousSignature) return fixed;
+      }
+    }
+
+    return [];
   }
 
   function playPlaylistItemAt_(index) {
@@ -3943,28 +4327,34 @@
     clearPlaylistVolumeFade_();
     playlistPlayback.fadingOut = false;
 
-    const songId = playlistPlayback.queue[index];
-    const song = findSongById(songId);
+    const entry = playlistPlayback.queue[index];
+    const playable = getPlaylistPlayableItem_(entry);
 
-    if (!song || !canAddSongToPlaylist(song)) {
+    if (!playable || (!playable.videoId && !playable.playlistId)) {
       playlistPlayback.index = index;
       playNextPlaylistItem_("invalid");
       return;
     }
 
     playlistPlayback.index = index;
-    playlistPlayback.currentEnd = timelineToSeconds(song.end);
+    playlistPlayback.currentEnd = playable.hasSegment ? playable.end : 0;
 
-    const videoId = extractYoutubeVideoId(song.link);
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
 
     destroyYoutubePlayer_(false);
-    currentModalSongId = song.id;
-    els.modalSongTitle.textContent = getDisplayTitle(song);
-    els.modalSongArtist.textContent = String(song.artist || "").trim() || getDisplayArtist(song);
-    setModalFooterText([formatSongDate(song), song.timeline || ""].filter(Boolean).join(" ／ "));
-    updateModalLikePanel(currentModalSongId);
+    currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";
+    els.modalSongTitle.textContent = playable.title || "";
+    els.modalSongArtist.textContent = playable.artist || "";
+
+    if (playable.type === "song" && playable.song) {
+      setModalFooterText([formatSongDate(playable.song), playable.song.timeline || ""].filter(Boolean).join(" ／ "));
+      updateModalLikePanel(currentModalSongId);
+    } else {
+      setModalFooterText("");
+      setExternalModalPanelsHidden_(true);
+    }
+
     renderPlaylistPlaybackUi_();
     setupMediaSessionPlaybackControls_();
 
@@ -3977,7 +4367,7 @@
     ensureYouTubeIframeApi_()
       .then(() => {
         if (!isCurrentYoutubeToken_(token)) return;
-        createYoutubePlayer_(videoId, timelineToSeconds(song.timeline), token, playlistPlayback.currentEnd);
+        createYoutubePlayer_(playable.videoId, playable.start, token, playlistPlayback.currentEnd, { playlistId: playable.playlistId });
       })
       .catch(err => {
         if (!isCurrentYoutubeToken_(token)) return;
@@ -4002,7 +4392,14 @@
         return;
       }
       nextIndex = 0;
-      if (playlistPlayback.mode === "random") playlistPlayback.queue = buildPlaylistQueue_(playlistPlayback.list, "random", playlistPlayback.queue[playlistPlayback.index]);
+      if (playlistPlayback.mode === "random") {
+        const previousQueue = [...playlistPlayback.queue];
+        const lastKey = getPlaylistItemKey_(playlistPlayback.queue[playlistPlayback.index]);
+        playlistPlayback.queue = buildPlaylistQueue_(playlistPlayback.list, "random", {
+          avoidFirstKey: lastKey,
+          previousQueue
+        });
+      }
     }
     playPlaylistItemAt_(nextIndex);
   }
