@@ -1131,7 +1131,8 @@
     const finalGroups = groups.slice(0, dateVisibleDateCount);
     els.dateList.innerHTML = finalGroups.map(group => {
       const key = group.key;
-      const collapsed = isGroupCollapsed("date", key, dateSortMode === "likes_total");
+      const defaultCollapsed = getDateGroupDefaultCollapsed_(group);
+      const collapsed = isGroupCollapsed("date", key, defaultCollapsed);
       const countText = dateSortMode === "likes_total"
         ? `${group.items.length}곡 · 추천 ${group.likesTotal}`
         : `${group.items.length}곡`;
@@ -1160,6 +1161,15 @@
   function renderDateGroupItems(group) {
     if (!group || !Array.isArray(group.items)) return "";
     return group.items.map(renderSongCard).join("");
+  }
+
+  function getDateGroupDefaultCollapsed_(group) {
+    if (dateSortMode === "likes_total") return true;
+    return !hasDateGroupReplayLink_(group);
+  }
+
+  function hasDateGroupReplayLink_(group) {
+    return Boolean(group && Array.isArray(group.items) && group.items.some(song => String(song && song.link || "").trim()));
   }
 
   function renderDateGroupBody(key, body) {
@@ -2227,6 +2237,40 @@
     }
   }
 
+  function setModalScrollingText_(el, text) {
+    if (!el) return;
+
+    const value = String(text || "");
+    el.innerHTML = "";
+    el.classList.remove("modal-marquee-active");
+    el.style.removeProperty("--modal-marquee-distance");
+    el.style.removeProperty("--modal-marquee-duration");
+
+    const inner = document.createElement("span");
+    inner.className = "modal-marquee-inner";
+    inner.textContent = value;
+    el.appendChild(inner);
+
+    window.requestAnimationFrame(() => {
+      const distance = Math.ceil(inner.scrollWidth - el.clientWidth);
+      if (distance <= 2) return;
+
+      const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+      const totalSeconds = 4 + moveSeconds * 2;
+      el.style.setProperty("--modal-marquee-distance", `${distance}px`);
+      el.style.setProperty("--modal-marquee-duration", `${totalSeconds}s`);
+      el.classList.add("modal-marquee-active");
+    });
+  }
+
+  function setModalTitleText_(text) {
+    setModalScrollingText_(els.modalSongTitle, text);
+  }
+
+  function setModalArtistText_(text) {
+    setModalScrollingText_(els.modalSongArtist, text);
+  }
+
   function setModalFooterText(text) {
     const value = String(text || "");
     const target = els.modalSongFooterText || els.modalSongFooter;
@@ -2362,8 +2406,8 @@
 
     destroyYoutubePlayer_(false);
     currentModalSongId = meta.id || "";
-    els.modalSongTitle.textContent = meta.title || "";
-    els.modalSongArtist.textContent = meta.artist || "";
+    setModalTitleText_(meta.title || "");
+    setModalArtistText_(meta.artist || "");
     setModalFooterText([meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ "));
     updateModalLikePanel(currentModalSongId);
     setupMediaSessionPlaybackControls_();
@@ -2396,8 +2440,8 @@
     els.youtubeModal.hidden = true;
     destroyYoutubePlayer_(true);
     hideYoutubeLoading(true);
-    els.modalSongTitle.textContent = "";
-    els.modalSongArtist.textContent = "";
+    setModalTitleText_("");
+    setModalArtistText_("");
     setModalFooterText("");
     currentModalSongId = "";
     youtubeInitialLoadingSuppressed = false;
@@ -4438,8 +4482,8 @@
 
     destroyYoutubePlayer_(false);
     currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";
-    els.modalSongTitle.textContent = playable.title || "";
-    els.modalSongArtist.textContent = playable.artist || "";
+    setModalTitleText_(playable.title || "");
+    setModalArtistText_(playable.artist || "");
 
     if (playable.type === "song" && playable.song) {
       setModalFooterText([formatSongDate(playable.song), playable.song.timeline || ""].filter(Boolean).join(" ／ "));

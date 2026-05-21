@@ -842,7 +842,8 @@ html.dark-mode .like-button.liking {
   font-weight: 900;
   line-height: 1.25;
   word-break: keep-all;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
   text-shadow: 0px 0px 3px #D8D8D8;
 }
 
@@ -851,8 +852,27 @@ html.dark-mode .like-button.liking {
   color: #cbd5e1;
   font-size: 1rem;
   line-height: 1.35;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  white-space: nowrap;
   text-shadow: 0px 0px 3px #b7b7b7;
+}
+
+.modal-marquee-inner {
+  display: inline-block;
+  max-width: none;
+  min-width: 0;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.modal-marquee-active .modal-marquee-inner {
+  animation: modalTextMarquee var(--modal-marquee-duration, 10s) ease-in-out infinite;
+}
+
+@keyframes modalTextMarquee {
+  0%, 20% { transform: translateX(0); }
+  50%, 70% { transform: translateX(calc(-1 * var(--modal-marquee-distance, 0px))); }
+  100% { transform: translateX(0); }
 }
 
 .modal-like-panel {
