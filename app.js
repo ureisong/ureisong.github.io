@@ -56,7 +56,15 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    "20251104_1_016", "20251021_1_013"
+    "20251104_1_016", "20251021_1_013",
+    {
+      type: "external",
+      key: "external:d68gIXrr_yY",
+      url: "https://youtu.be/d68gIXrr_yY",
+      videoId: "d68gIXrr_yY",
+      title: "스타드림(StarDream)「Break it Out」Official MV",
+      section: "오리지널 곡"
+    }
     /*
       완전히 처음 접속해서 localStorage에 플레이리스트 데이터가 없을 때만
       기본 플레이리스트에 자동으로 넣을 항목 예시
