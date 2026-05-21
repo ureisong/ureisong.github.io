@@ -17,7 +17,6 @@
     </div>
     <div class="status-box">
       <div id="dataStatus">데이터 로딩 중...</div>
-      <div id="cooldownStatus" class="cooldown"></div>
     </div>
   </header>
 
@@ -81,7 +80,10 @@
         <span id="playlistSummaryName" class="playlist-summary-name">플레이리스트 없음</span>
       </div>
       <div class="summary-spacer" aria-hidden="true"></div>
-      <div class="filter-active-status"><strong id="resultCount">0</strong>곡 필터 적용 중…</div>
+      <div class="summary-status-wrap">
+        <div class="filter-active-status"><strong id="resultCount">0</strong>곡 필터 적용 중…</div>
+        <div id="cooldownStatus" class="cooldown summary-cooldown" aria-live="polite"></div>
+      </div>
     </section>
 
 

@@ -276,10 +276,47 @@ h1 {
 }
 
 .summary-spacer { flex: 1 1 auto; }
-.filter-active-status { margin-left: auto; text-align: right; }
+.summary-status-wrap {
+  position: relative;
+  min-width: min(320px, 52vw);
+  min-height: 22px;
+  margin-left: auto;
+  text-align: right;
+}
+
+.filter-active-status,
+.summary-cooldown {
+  position: absolute;
+  inset: 0 0 auto auto;
+  transition: opacity 0.26s ease, transform 0.26s ease;
+}
+
+.filter-active-status {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.summary-cooldown {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 900;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+body.cooldown-status-visible .filter-active-status {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+body.cooldown-status-visible .summary-cooldown {
+  opacity: 1;
+  transform: translateY(0);
+}
 
 .panel-summary h2 {
-  margin: 0 0 4px;
+  margin: -15px 0 4px;
   font-size: 22px;
 }
 
@@ -597,6 +634,8 @@ html.dark-mode .like-button.liking {
 
 .date-group-title.collapsed::after { transform: rotate(-90deg); }
 .date-group-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.date-group-count[role="button"] { cursor: pointer; }
+.date-group-count[role="button"]:hover { color: var(--accent); }
 .date-group > .song-list { padding: 10px; }
 .date-group > .song-list.collapsed { display: none; }
 .sung-group .date-group-title span:first-child { overflow-wrap: anywhere; }
@@ -838,6 +877,7 @@ html.dark-mode .like-button.liking {
 .modal-song-text { min-width: 0; }
 
 .modal-song-title {
+  cursor: pointer;
   font-size: calc(1rem + 8pt);
   font-weight: 900;
   line-height: 1.25;
@@ -848,6 +888,7 @@ html.dark-mode .like-button.liking {
 }
 
 .modal-song-artist {
+  cursor: pointer;
   margin-top: 4px;
   color: #cbd5e1;
   font-size: 1rem;
@@ -903,6 +944,102 @@ html.dark-mode .like-button.liking {
   display: block;
 }
 
+.youtube-side-nav {
+  position: absolute;
+  top: 50%;
+  z-index: 4;
+  width: 10%;
+  height: 180px;
+  max-height: calc(100% - 24px);
+  min-width: 54px;
+  padding: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.18s ease;
+}
+
+.youtube-side-prev { left: 0; }
+.youtube-side-next { right: 0; }
+
+@media (hover: hover) and (pointer: fine) {
+  .youtube-frame-wrap.playlist-side-nav-enabled .youtube-side-nav {
+    display: flex;
+  }
+}
+
+.youtube-side-nav::before {
+  content: "";
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  position: relative;
+  background: var(--card);
+  color: var(--text);
+  border: 4px solid var(--text);
+  border-radius: 999px;
+  box-sizing: border-box;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.18s ease, transform 0.18s ease, background 0.18s ease;
+}
+
+.youtube-side-nav::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-top: 4px solid var(--text);
+  border-right: 4px solid var(--text);
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.youtube-side-prev::after {
+  left: 50%;
+  transform: translate(-34%, -50%) rotate(-135deg) scale(0.9);
+}
+
+.youtube-side-next::after {
+  right: 50%;
+  transform: translate(34%, -50%) rotate(45deg) scale(0.9);
+}
+
+.youtube-side-nav:hover,
+.youtube-side-nav:focus-visible {
+  opacity: 1;
+}
+
+.youtube-side-nav:hover::before,
+.youtube-side-nav:focus-visible::before,
+.youtube-side-nav:hover::after,
+.youtube-side-nav:focus-visible::after {
+  opacity: 1;
+}
+
+.youtube-side-nav:hover::before,
+.youtube-side-nav:focus-visible::before {
+  background: var(--surface-muted);
+  transform: scale(1);
+}
+
+.youtube-side-prev:hover::after,
+.youtube-side-prev:focus-visible::after {
+  transform: translate(-34%, -50%) rotate(-135deg) scale(1);
+}
+
+.youtube-side-next:hover::after,
+.youtube-side-next:focus-visible::after {
+  transform: translate(34%, -50%) rotate(45deg) scale(1);
+}
+
 .youtube-loading {
   position: absolute;
   inset: 0;
@@ -947,6 +1084,7 @@ html.dark-mode .like-button.liking {
   font-weight: 900;
   line-height: 1.5;
   letter-spacing: -0.01em;
+  white-space: pre-line;
 }
 
 @keyframes LoadingBreath {
@@ -1378,6 +1516,7 @@ html.dark-mode .default-spinner {
 
 .playlist-summary-name {
   max-width: min(34vw, 280px);
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1449,8 +1588,7 @@ html.dark-mode .playlist-add-button {
   padding: 28px 22px 22px;
   display: grid;
   gap: 12px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
   background: var(--card);
   color: var(--text);
   border: 1px solid var(--line);
@@ -1459,12 +1597,12 @@ html.dark-mode .playlist-add-button {
 }
 
 .playlist-modal-card .modal-close {
-  top: 10px;
-  right: 10px;
+  top: -16px;
+  right: -16px;
 }
 
 .playlist-modal-card h2 {
-  margin: 0 0 4px;
+  margin: -15px 0 4px;
   font-size: 22px;
 }
 
@@ -1472,6 +1610,9 @@ html.dark-mode .playlist-add-button {
 .playlist-items {
   display: grid;
   gap: 8px;
+  max-height: min(46vh, 420px);
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .playlist-item-row {
@@ -1487,6 +1628,72 @@ html.dark-mode .playlist-add-button {
 
 .playlist-item-row[draggable="true"] {
   cursor: grab;
+}
+
+.playlist-now-playing-mode #playlistActionRow,
+.playlist-now-playing-mode .playlist-bulk-row,
+.playlist-now-playing-mode .playlist-item-check-wrap,
+.playlist-now-playing-mode .playlist-item-mobile-move,
+.playlist-now-playing-mode .playlist-item-remove {
+  display: none !important;
+}
+
+.playlist-now-playing-mode .playlist-item-row {
+  grid-template-columns: minmax(0, 1fr);
+  cursor: default;
+}
+
+.playlist-now-playing-mode .playlist-item-row[data-playlist-now-index] {
+  cursor: pointer;
+}
+
+.playlist-now-playing-mode .playlist-item-row[data-playlist-now-index]:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.playlist-now-playing-mode .playlist-item-row-current {
+  border-color: #813a48;
+  background: rgba(129, 58, 72, 0.16);
+  box-shadow: 0 0 0 2px rgba(129, 58, 72, 0.18);
+}
+
+html.dark-mode .playlist-now-playing-mode .playlist-item-row-current {
+  border-color: #ff9bad;
+  background: rgba(255, 155, 173, 0.12);
+  box-shadow: 0 0 0 2px rgba(255, 155, 173, 0.18);
+}
+
+.playlist-item-row-added-pulse {
+  animation: playlistItemAddedPulse 1s ease-in-out 3;
+}
+
+@keyframes playlistItemAddedPulse {
+  0%, 100% {
+    border-color: var(--line);
+    box-shadow: none;
+  }
+
+  50% {
+    border-color: #813a48;
+    box-shadow: 0 0 0 3px rgba(129, 58, 72, 0.25);
+  }
+}
+
+html.dark-mode .playlist-item-row-added-pulse {
+  animation-name: playlistItemAddedPulseDark;
+}
+
+@keyframes playlistItemAddedPulseDark {
+  0%, 100% {
+    border-color: var(--line);
+    box-shadow: none;
+  }
+
+  50% {
+    border-color: #ff9bad;
+    box-shadow: 0 0 0 3px rgba(255, 155, 173, 0.22);
+  }
 }
 
 .playlist-item-row.dragging {
@@ -1661,9 +1868,10 @@ html.dark-mode .playlist-add-button {
     min-width: 0;
   }
 
-  .filter-active-status {
+  .summary-status-wrap {
     order: 2;
     flex: 0 0 auto;
+    min-width: min(190px, 38vw);
   }
 
   .playlist-summary-name {
@@ -1788,12 +1996,16 @@ html.dark-mode #playlistPlayRandomButton {
     min-width: 0;
   }
 
-  .filter-active-status {
+  .summary-status-wrap {
     order: 2;
     flex: 0 0 auto;
     margin-left: 0;
-    text-align: right;
+    min-width: min(190px, 38vw);
     justify-self: flex-end;
+  }
+
+  .filter-active-status,
+  .summary-cooldown {
     white-space: nowrap;
   }
 
@@ -1878,6 +2090,23 @@ html.playlist-disabled [data-playlist-feature] {
   display: none !important;
 }
 
+.playlist-add-button.playlist-remove-button {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.playlist-add-button.playlist-remove-button::before {
+  width: 14px;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+}
+
+.playlist-add-button.playlist-remove-button::after {
+  display: none;
+}
+
 .playlist-modal-card #playlistSelect,
 .playlist-modal-card .playlist-name-input {
   width: 100%;
@@ -1938,10 +2167,6 @@ html.playlist-disabled [data-playlist-feature] {
   .header-main {
     padding-bottom: 12px;
   }
-}
-
-.playlist-modal-card h2 {
-  margin-top: -16px;
 }
 
 @media (hover: hover) and (pointer: fine) {
