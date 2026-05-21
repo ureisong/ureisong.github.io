@@ -56,7 +56,15 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    "20251104_1_016", "20251021_1_013"
+    "20251104_1_016", "20251021_1_013",
+    {
+      type: "external",
+      key: "external:d68gIXrr_yY",
+      url: "https://youtu.be/d68gIXrr_yY",
+      videoId: "d68gIXrr_yY",
+      title: "스타드림(StarDream)「Break it Out」Official MV",
+      section: "오리지널 곡"
+    }
     /*
       완전히 처음 접속해서 localStorage에 플레이리스트 데이터가 없을 때만
       기본 플레이리스트에 자동으로 넣을 항목 예시
@@ -2220,10 +2228,55 @@
 
   function setModalFooterText(text) {
     const value = String(text || "");
-    if (els.modalSongFooterText) {
-      els.modalSongFooterText.textContent = value;
-    } else if (els.modalSongFooter) {
-      els.modalSongFooter.textContent = value;
+    const target = els.modalSongFooterText || els.modalSongFooter;
+    if (!target) return;
+
+    target.textContent = "";
+
+    if (els.modalSongFooterText && value.includes("／") && currentModalSongId) {
+      const parts = value.split("／");
+      parts.forEach((part, index) => {
+        if (index > 0) {
+          const shareButton = document.createElement("button");
+          shareButton.type = "button";
+          shareButton.className = "modal-share-separator";
+          shareButton.title = "공유링크 복사";
+          shareButton.textContent = "／";
+          shareButton.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            copySongShareLink_(currentModalSongId);
+          });
+          target.appendChild(shareButton);
+        }
+
+        target.appendChild(document.createTextNode(part));
+      });
+      return;
+    }
+
+    target.textContent = value;
+  }
+
+  async function copySongShareLink_(songId) {
+    const id = String(songId || "").trim();
+    if (!id) {
+      console.warn("[공유링크 복사 실패] 곡 id가 없습니다.");
+      return false;
+    }
+
+    const baseUrl = `${window.location.origin}${window.location.pathname}`;
+    const shareUrl = `${baseUrl}?id=${encodeURIComponent(id)}`;
+
+    try {
+      await writeTextToClipboard(shareUrl);
+      console.log(`[공유링크 복사 성공] ${id} → ${shareUrl}`);
+      showCooldownText("공유링크를 복사했습니다");
+      return true;
+    } catch (err) {
+      console.warn(`[공유링크 복사 실패] ${id}`, err);
+      showCooldownText("공유링크 복사에 실패했습니다");
+      return false;
     }
   }
 
@@ -2928,20 +2981,25 @@
   function extractCoverItemsFromRows(rows) {
     return rows
       .filter(row => String(row.key || "").trim().toLowerCase() === "cover")
-      .map(row => makeCoverItemFromUrl(String(row.value || "").trim()))
+      .map(row => makeCoverItemFromUrl(
+        String(row.value || "").trim(),
+        { section: String(row.link || "").trim() === "TRUE" ? "오리지널 곡" : "커버곡" }
+      ))
       .filter(Boolean);
   }
 
-  function makeCoverItemFromUrl(url) {
+  function makeCoverItemFromUrl(url, options = {}) {
     const normalizedUrl = normalizeYoutubeUrlForParse(url);
     if (!normalizedUrl) return null;
     const videoId = extractYoutubeVideoId(normalizedUrl);
     if (!videoId) return null;
+    const section = String(options.section || "커버곡").trim() || "커버곡";
 
     return {
       id: videoId,
       url: normalizedUrl,
       title: "커버곡을 불러오는 중...",
+      section,
       thumbnail: `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg`,
       fallbackThumbnail: `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`
     };
@@ -2958,6 +3016,7 @@
         return {
           ...made,
           title: String(item && item.title || made.title || "커버곡").trim() || "커버곡",
+          section: String(item && item.section || made.section || "커버곡").trim() || "커버곡",
           thumbnail: String(item && item.thumbnail || made.thumbnail || "").trim() || made.thumbnail,
           fallbackThumbnail: String(item && item.fallbackThumbnail || made.fallbackThumbnail || "").trim() || made.fallbackThumbnail
         };
@@ -3083,7 +3142,7 @@
   function renderCoverCard(item) {
     const isCenter = item._slot === 0;
     return `
-      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="cover" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
+      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="cover" data-playlist-section="${escapeHtml(item.section || "커버곡")}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
         <div class="cover-thumb-wrap">
           <img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />
         </div>
@@ -3528,7 +3587,11 @@
     const safeMessage = String(message || "");
 
     if (els.likeNoticeModalMessage) {
-      els.likeNoticeModalMessage.innerHTML = `<strong>${escapeHtml(safeTitle)}</strong><br>${escapeHtmlWithBr(safeMessage)}`;
+      els.likeNoticeModalMessage.innerHTML = `
+        <strong class="mini-modal-title">${escapeHtml(safeTitle)}</strong>
+        <span class="mini-modal-separator" aria-hidden="true"></span>
+        <span class="mini-modal-body">${escapeHtmlWithBr(safeMessage)}</span>
+      `;
     }
     window.clearTimeout(likeDisabledModalTimer);
     els.likeDisabledModal.hidden = false;
@@ -3677,7 +3740,9 @@
     const url = String(card && card.href || "").trim();
     const title = String(card && card.querySelector(".cover-title") && card.querySelector(".cover-title").textContent || "").trim()
       || (kind === "rec" ? "추천 팬 영상" : "커버곡");
-    const section = kind === "rec" ? "추천 팬 영상" : "커버곡";
+    const section = kind === "rec"
+      ? "추천 팬 영상"
+      : String(card && card.dataset && card.dataset.playlistSection || "커버곡").trim() || "커버곡";
     const videoId = extractYoutubeVideoId(url);
     const playlistId = extractYoutubePlaylistId(url);
 
