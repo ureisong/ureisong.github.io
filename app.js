@@ -26,6 +26,7 @@
   const YOUTUBE_SLOW_SECOND_MESSAGE_MS = 2000;
   const YOUTUBE_NO_RESPONSE_CLOSE_MS = 10000;
   const YOUTUBE_NO_RESPONSE_NOTICE_MS = 3000;
+  const YOUTUBE_SHARE_AUTOPLAY_WAIT_MS = 2600;
 
   const RECOMMEND_LIMITS = {
     random: 5,
@@ -212,10 +213,12 @@
   let youtubeLoadingFadeTimer = null;
   let youtubeLoadingStatusTimer = null;
   let youtubeBufferingTimer = null;
+  let youtubeShareAutoplayWaitTimer = null;
   let youtubeSlowSecondTimer = null;
   let youtubeNoResponseTimer = null;
   let youtubeStartedPlaying = false;
   let youtubeInitialLoadingSuppressed = false;
+  let youtubeAwaitingManualPlayback = false;
   let currentYoutubeLoadingText = "";
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
@@ -239,18 +242,27 @@
   let playlistFinishedCloseArmed = false;
   let cooldownCrossfadeTimer = null;
   let cooldownClearTimer = null;
+  let suppressPageLoadingForInitialShare = false;
 
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
-    showPageLoading("...LOADING...", "초기화면 준비 중.");
+    const initialSongId = getInitialSongIdQuery_();
+    const initialCachedPayload = initialSongId ? readLocalJsonCache() : null;
+    const canTryInitialCache = Boolean(initialSongId && initialCachedPayload);
+
+    if (!canTryInitialCache) showPageLoading("...LOADING...", "초기화면 준비 중.");
     bindEvents();
     loadPlaylists();
     applyPlaylistEnabledState(false);
     renderPlaylistSummary();
     setupPlaylistSummaryResizeWatcher_();
     setupFavicon();
-    showPageLoading("...LOADING...", "공지사항 읽는 중..");
+
+    const openedInitialFromCache = canTryInitialCache ? tryOpenInitialSongFromLocalCache_(initialSongId, initialCachedPayload) : false;
+    suppressPageLoadingForInitialShare = openedInitialFromCache;
+
+    if (!openedInitialFromCache) showPageLoading("...LOADING...", "공지사항 읽는 중..");
     renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
     renderFooter();
     setupCounterTracking();
@@ -268,7 +280,8 @@
     showPageLoading("...LOADING...", "설정 불러오는 중.....");
     await loadSearchAliases(false, currentSettingsRows);
     await loadData(false, currentSettingsRows);
-    handleInitialSongIdQuery_();
+    suppressPageLoadingForInitialShare = false;
+    if (!openedInitialFromCache) handleInitialSongIdQuery_();
   }
   
   function bindResponsiveRender() {
@@ -2117,15 +2130,66 @@
     return allSongs.find(song => song.id === id) || filteredSongs.find(song => song.id === id) || null;
   }
 
-  function handleInitialSongIdQuery_() {
-    let requestedId = "";
-
+  function getInitialSongIdQuery_() {
     try {
       const params = new URLSearchParams(window.location.search || "");
-      requestedId = String(params.get("id") || "").trim();
+      return String(params.get("id") || "").trim();
     } catch {
-      requestedId = "";
+      return "";
     }
+  }
+
+  function findSongInCachedPayload_(payload, id) {
+    const requestedId = String(id || "").trim();
+    if (!requestedId || !payload) return null;
+
+    const cachedSongs = normalizeSongs(payload.data || payload || []);
+    return cachedSongs.find(song => song.id === requestedId) || null;
+  }
+
+  function applyCachedPayloadForInitialSong_(payload) {
+    if (!payload) return;
+
+    allSongs = normalizeSongs(payload.data || payload || []);
+    currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
+    currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
+    applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
+    coverItems = normalizeCoverItems(payload.covers || []);
+    recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
+    likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
+    playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
+    applyPlaylistEnabledState(playlistEnabled);
+    renderPlaylistSummary();
+    updatePlaylistOpenButtonLabel_();
+  }
+
+  function tryOpenInitialSongFromLocalCache_(requestedId, payload) {
+    const id = String(requestedId || "").trim();
+    if (!id || !payload) return false;
+
+    const song = findSongInCachedPayload_(payload, id);
+    if (!song || !String(song.link || "").trim()) return false;
+
+    applyCachedPayloadForInitialSong_(payload);
+    clearInitialSongIdQuery_();
+    hidePageLoading();
+
+    const youtubeUrl = makeTimelineLink(song.link, song.timeline);
+    window.setTimeout(() => {
+      openYoutubeModal(youtubeUrl, {
+        title: getDisplayTitle(song),
+        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        date: formatSongDate(song),
+        timeline: song.timeline || "",
+        id: song.id
+      }, { fromShareLink: true, forceNormalModal: true, shareAutoplayWait: true });
+    }, 0);
+
+    return true;
+  }
+
+  function handleInitialSongIdQuery_() {
+    const requestedId = getInitialSongIdQuery_();
 
     if (!requestedId) return;
 
@@ -2150,7 +2214,7 @@
         date: formatSongDate(song),
         timeline: song.timeline || "",
         id: song.id
-      }, { fromShareLink: true, suppressInitialLoading: true });
+      }, { fromShareLink: true, forceNormalModal: true, shareAutoplayWait: true });
     }, 120);
   }
 
@@ -2548,10 +2612,14 @@
 
   function openYoutubeModal(url, meta = {}, options = {}) {
     const modalOptions = options || {};
-    playlistPlayback = null;
-    clearPlaylistSegmentWatcher_();
-    clearPlaylistSkipTimer_();
-    renderPlaylistPlaybackUi_();
+    if (modalOptions.forceNormalModal === true || !modalOptions.keepPlaylistPlayback) {
+      disarmPlaylistFinishedClose_();
+      playlistPlayback = null;
+      clearPlaylistSegmentWatcher_();
+      clearPlaylistSkipTimer_();
+      clearPlaylistVolumeFade_();
+      renderPlaylistPlaybackUi_();
+    }
     const videoId = extractYoutubeVideoId(url);
 
     if (!videoId) {
@@ -2563,6 +2631,8 @@
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
     youtubeInitialLoadingSuppressed = modalOptions.suppressInitialLoading === true;
+    youtubeAwaitingManualPlayback = false;
+    clearYoutubeShareAutoplayWaitTimer_();
 
     destroyYoutubePlayer_(false);
     currentModalSongId = meta.id || "";
@@ -2576,7 +2646,14 @@
     els.youtubeModal.hidden = false;
     document.body.classList.add("modal-open");
 
-    if (youtubeInitialLoadingSuppressed) {
+    if (modalOptions.shareAutoplayWait === true) {
+      if (youtubeInitialLoadingSuppressed) {
+        hideYoutubeLoading(true);
+      } else {
+        showYoutubeLoading();
+      }
+      scheduleYoutubeShareAutoplayWait_(token);
+    } else if (youtubeInitialLoadingSuppressed) {
       hideYoutubeLoading(true);
     } else {
       showYoutubeLoading();
@@ -2606,6 +2683,8 @@
     setModalFooterText("");
     currentModalSongId = "";
     youtubeInitialLoadingSuppressed = false;
+    youtubeAwaitingManualPlayback = false;
+    clearYoutubeShareAutoplayWaitTimer_();
     if (els.youtubeFrameWrap) els.youtubeFrameWrap.classList.remove("playlist-side-nav-enabled");
     clearPlaylistSegmentWatcher_();
     clearPlaylistVolumeFade_();
@@ -2724,7 +2803,9 @@
   function activateYoutubeLoadingAfterUserOrAutoplay_(token) {
     if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
 
+    clearYoutubeShareAutoplayWaitTimer_();
     youtubeInitialLoadingSuppressed = false;
+    youtubeAwaitingManualPlayback = false;
     showYoutubeLoading();
     scheduleYoutubeLoadingStatus_(token);
   }
@@ -2735,7 +2816,9 @@
     switch (event.data) {
       case YT.PlayerState.PLAYING:
         setMediaSessionPlaybackState_("playing");
+        clearYoutubeShareAutoplayWaitTimer_();
         youtubeInitialLoadingSuppressed = false;
+        youtubeAwaitingManualPlayback = false;
         youtubeStartedPlaying = true;
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
@@ -2744,10 +2827,13 @@
         startPlaylistSegmentWatcher_();
         break;
       case YT.PlayerState.BUFFERING:
+        clearYoutubeShareAutoplayWaitTimer_();
         if (youtubeStartedPlaying) {
           scheduleYoutubeBufferingStatus_(token);
-        } else if (youtubeInitialLoadingSuppressed) {
+        } else if (youtubeInitialLoadingSuppressed || youtubeAwaitingManualPlayback) {
           activateYoutubeLoadingAfterUserOrAutoplay_(token);
+        } else {
+          scheduleYoutubeLoadingStatus_(token);
         }
         break;
       case YT.PlayerState.CUED:
@@ -2790,6 +2876,8 @@
 
   function destroyYoutubePlayer_(clearFrame = true) {
     clearYoutubeLoadingTimers_();
+    clearYoutubeShareAutoplayWaitTimer_();
+    youtubeAwaitingManualPlayback = false;
     clearPlaylistSkipTimer_();
     clearPlaylistSegmentWatcher_();
     clearPlaylistVolumeFade_();
@@ -2815,6 +2903,24 @@
 
   function isCurrentYoutubeToken_(token) {
     return token === youtubePlayerToken && els.youtubeModal && !els.youtubeModal.hidden;
+  }
+
+  function scheduleYoutubeShareAutoplayWait_(token) {
+    clearYoutubeShareAutoplayWaitTimer_();
+    youtubeShareAutoplayWaitTimer = window.setTimeout(() => {
+      if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+      youtubeAwaitingManualPlayback = true;
+      clearYoutubeLoadingStatusTimer_();
+      clearYoutubeBufferingTimer_();
+      hideYoutubeLoading(false, 0);
+    }, YOUTUBE_SHARE_AUTOPLAY_WAIT_MS);
+  }
+
+  function clearYoutubeShareAutoplayWaitTimer_() {
+    if (youtubeShareAutoplayWaitTimer) {
+      window.clearTimeout(youtubeShareAutoplayWaitTimer);
+      youtubeShareAutoplayWaitTimer = null;
+    }
   }
 
   function scheduleYoutubeLoadingStatus_(token) {
@@ -2855,6 +2961,7 @@
   function clearYoutubeLoadingTimers_() {
     clearYoutubeLoadingStatusTimer_();
     clearYoutubeBufferingTimer_();
+    clearYoutubeShareAutoplayWaitTimer_();
     if (youtubeLoadingFadeTimer) {
       window.clearTimeout(youtubeLoadingFadeTimer);
       youtubeLoadingFadeTimer = null;
@@ -3140,8 +3247,15 @@
         return;
       }
 
+      if (element === els.playlistPlaybackBanner || element === els.playlistPlayerControls) {
+        element.hidden = !(enabled && playlistPlayback && playlistPlayback.active);
+        return;
+      }
+
       element.hidden = !enabled;
     });
+
+    renderPlaylistPlaybackUi_();
 
     if (!enabled) {
       closePlaylistModal();
@@ -4778,6 +4892,8 @@
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
     youtubeInitialLoadingSuppressed = false;
+    youtubeAwaitingManualPlayback = false;
+    clearYoutubeShareAutoplayWaitTimer_();
 
     destroyYoutubePlayer_(false);
     currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";
@@ -5021,7 +5137,7 @@
   }
 
   function showPageLoading(message, sub="") {
-    if (!els.pageLoading) return;
+    if (!els.pageLoading || suppressPageLoadingForInitialShare) return;
     if (els.pageLoadingText) els.pageLoadingText.textContent = message || "로딩 중...";
     if (els.pageLoadingSubText) els.pageLoadingSubText.textContent = sub || "";
     els.pageLoading.hidden = false;
