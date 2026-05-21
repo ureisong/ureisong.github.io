@@ -56,15 +56,7 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    "20251104_1_016", "20251021_1_013",
-    {
-      type: "external",
-      key: "external:d68gIXrr_yY",
-      url: "https://youtu.be/d68gIXrr_yY",
-      videoId: "d68gIXrr_yY",
-      title: "스타드림(StarDream)「Break it Out」Official MV",
-      section: "오리지널 곡"
-    }
+    "20251104_1_016", "20251021_1_013"
     /*
       완전히 처음 접속해서 localStorage에 플레이리스트 데이터가 없을 때만
       기본 플레이리스트에 자동으로 넣을 항목 예시
@@ -215,6 +207,7 @@
   let youtubeSlowSecondTimer = null;
   let youtubeNoResponseTimer = null;
   let youtubeStartedPlaying = false;
+  let youtubeInitialLoadingSuppressed = false;
   let currentYoutubeLoadingText = "";
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
@@ -2004,7 +1997,7 @@
         date: formatSongDate(song),
         timeline: song.timeline || "",
         id: song.id
-      });
+      }, { fromShareLink: true, suppressInitialLoading: true });
     }, 120);
   }
 
@@ -2341,7 +2334,8 @@
     setMediaSessionPlaybackState_("none");
   }
 
-  function openYoutubeModal(url, meta = {}) {
+  function openYoutubeModal(url, meta = {}, options = {}) {
+    const modalOptions = options || {};
     playlistPlayback = null;
     clearPlaylistSegmentWatcher_();
     clearPlaylistSkipTimer_();
@@ -2356,6 +2350,7 @@
     const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
+    youtubeInitialLoadingSuppressed = modalOptions.suppressInitialLoading === true;
 
     destroyYoutubePlayer_(false);
     currentModalSongId = meta.id || "";
@@ -2368,13 +2363,18 @@
     els.youtubeFrameWrap.innerHTML = `<div id="youtubePlayerMount" class="youtube-player-mount"></div>`;
     els.youtubeModal.hidden = false;
     document.body.classList.add("modal-open");
-    showYoutubeLoading();
-    scheduleYoutubeLoadingStatus_(token);
+
+    if (youtubeInitialLoadingSuppressed) {
+      hideYoutubeLoading(true);
+    } else {
+      showYoutubeLoading();
+      scheduleYoutubeLoadingStatus_(token);
+    }
 
     ensureYouTubeIframeApi_()
       .then(() => {
         if (!isCurrentYoutubeToken_(token)) return;
-        createYoutubePlayer_(videoId, startSeconds, token);
+        createYoutubePlayer_(videoId, startSeconds, token, 0, { suppressInitialLoading: youtubeInitialLoadingSuppressed });
       })
       .catch(err => {
         if (!isCurrentYoutubeToken_(token)) return;
@@ -2392,6 +2392,7 @@
     els.modalSongArtist.textContent = "";
     setModalFooterText("");
     currentModalSongId = "";
+    youtubeInitialLoadingSuppressed = false;
     clearPlaylistSegmentWatcher_();
     clearPlaylistVolumeFade_();
     playlistPlayback = null;
@@ -2455,7 +2456,11 @@
     const mount = document.getElementById("youtubePlayerMount");
     if (!mount) return;
 
-    showYoutubeLoadingMessage(getCurrentYoutubeLoadingText_(), { preserveInitial: true });
+    if (options && options.suppressInitialLoading) {
+      hideYoutubeLoading(true);
+    } else {
+      showYoutubeLoadingMessage(getCurrentYoutubeLoadingText_(), { preserveInitial: true });
+    }
 
     const playerVars = {
       autoplay: 1,
@@ -2491,7 +2496,9 @@
             event.target.playVideo();
           } catch (err) {
             console.warn("YouTube 자동 재생 요청 실패", err);
-            showYoutubeLoadingMessage("재생 버튼 입력을 기다리는 중...");
+            if (!(options && options.suppressInitialLoading)) {
+              showYoutubeLoadingMessage("재생 버튼 입력을 기다리는 중...");
+            }
           }
         },
         onStateChange: event => handleYoutubePlayerStateChange_(event, token),
@@ -2500,12 +2507,21 @@
     });
   }
 
+  function activateYoutubeLoadingAfterUserOrAutoplay_(token) {
+    if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+
+    youtubeInitialLoadingSuppressed = false;
+    showYoutubeLoading();
+    scheduleYoutubeLoadingStatus_(token);
+  }
+
   function handleYoutubePlayerStateChange_(event, token) {
     if (!isCurrentYoutubeToken_(token) || !window.YT || !YT.PlayerState) return;
 
     switch (event.data) {
       case YT.PlayerState.PLAYING:
         setMediaSessionPlaybackState_("playing");
+        youtubeInitialLoadingSuppressed = false;
         youtubeStartedPlaying = true;
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
@@ -2514,7 +2530,11 @@
         startPlaylistSegmentWatcher_();
         break;
       case YT.PlayerState.BUFFERING:
-        if (youtubeStartedPlaying) scheduleYoutubeBufferingStatus_(token);
+        if (youtubeStartedPlaying) {
+          scheduleYoutubeBufferingStatus_(token);
+        } else if (youtubeInitialLoadingSuppressed) {
+          activateYoutubeLoadingAfterUserOrAutoplay_(token);
+        }
         break;
       case YT.PlayerState.CUED:
         clearYoutubeBufferingTimer_();
@@ -4406,6 +4426,7 @@
 
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
+    youtubeInitialLoadingSuppressed = modalOptions.suppressInitialLoading === true;
 
     destroyYoutubePlayer_(false);
     currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";
@@ -4426,8 +4447,13 @@
     els.youtubeFrameWrap.innerHTML = `<div id="youtubePlayerMount" class="youtube-player-mount"></div>`;
     els.youtubeModal.hidden = false;
     document.body.classList.add("modal-open");
-    showYoutubeLoading();
-    scheduleYoutubeLoadingStatus_(token);
+
+    if (youtubeInitialLoadingSuppressed) {
+      hideYoutubeLoading(true);
+    } else {
+      showYoutubeLoading();
+      scheduleYoutubeLoadingStatus_(token);
+    }
 
     ensureYouTubeIframeApi_()
       .then(() => {
