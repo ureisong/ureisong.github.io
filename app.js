@@ -1740,7 +1740,7 @@
     if (!song) return "플레이리스트에 추가할 수 없습니다";
     if (!String(song.link || "").trim()) return "다시보기 링크가 없어 플레이리스트에 추가할 수 없습니다";
     if (!String(song.timeline || "").trim()) return "시작 시간이 없어 플레이리스트에 추가할 수 없습니다";
-    if (!String(song.end || "").trim()) return "끝 시간이 없어 플레이리스트에 추가할 수 없습니다";
+    if (!String(song.end || "").trim()) return "입력된 데이터가 부족하여\n이 곡은 플레이리스트에 추가할 수 없습니다";
     const startSeconds = timelineToSeconds(song.timeline);
     const endSeconds = timelineToSeconds(song.end);
     if (!extractYoutubeVideoId(song.link)) return "YouTube 영상만 플레이리스트에 추가할 수 있습니다";
@@ -4426,7 +4426,7 @@
 
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
-    youtubeInitialLoadingSuppressed = modalOptions.suppressInitialLoading === true;
+    youtubeInitialLoadingSuppressed = false;
 
     destroyYoutubePlayer_(false);
     currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";

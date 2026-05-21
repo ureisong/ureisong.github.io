@@ -936,7 +936,7 @@ html.dark-mode .like-button.liking {
 
 .mini-modal-card {
   position: relative;
-  width: min(420px, calc(100vw - 42px));
+  width: min(500px, calc(100vw - 42px));
   min-height: 170px;
   padding: 34px 24px 30px;
   display: grid;
@@ -957,12 +957,11 @@ html.dark-mode .like-button.liking {
 .mini-modal-card::before {
   content: "";
   position: absolute;
-  inset: 0 0 auto;
-  height: 4px;
-  border-radius: 22px 22px 0 0;
+  inset: 0;
+  z-index: 0;
   pointer-events: none;
-  background: linear-gradient(90deg, var(--accent), rgba(255,255,255,0.70), var(--accent));
-  opacity: 0.86;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), rgba(255,255,255,0.70), var(--accent)) top left / 100% 4px no-repeat;
 }
 
 .mini-modal-message {
