@@ -3195,7 +3195,8 @@
     if (!els.noticeText) return;
     const items = normalizeNoticeItems(input);
     const normalizedItems = items.length ? items : [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
-    const lineHtml = normalizedItems.map(formatNoticeItemHtml).join(`<span class="notice-separator">　　／　　</span>`);
+    const noticeSeparatorHtml = `<span class="notice-separator">　　／　　</span>`;
+    const lineHtml = normalizedItems.map(formatNoticeItemHtml).join(noticeSeparatorHtml) + (normalizedItems.length > 1 ? noticeSeparatorHtml : "");
 
     els.noticeText.innerHTML = `
       <span class="notice-track">
