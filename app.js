@@ -47,6 +47,7 @@
   const PLAYLIST_END_CHECK_INTERVAL_MS = 250;
   const PLAYLIST_ERROR_SKIP_MS = 1600;
   const PLAYLIST_FADE_DURATION_MS = 2000;
+  const PLAYLIST_END_FADE_TRIGGER_SECONDS = 1.5;
   const DEFAULT_PLAYLIST_NAME = "기본";
   const DEFAULT_PLAYLIST_SEED_ITEMS = [
     {
@@ -234,6 +235,7 @@
   let playlistSegmentTimer = null;
   let playlistSkipTimer = null;
   let playlistVolumeFadeTimer = null;
+  let playlistVolumeFadeSeq = 0;
   let playlistModalMode = "manager";
   let playlistModalQueuePreview = null;
   let playlistModalQueuePreviewListId = "";
@@ -2782,9 +2784,14 @@
             if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
               try {
                 const currentVolume = Number(event.target.getVolume && event.target.getVolume());
-                if (Number.isFinite(currentVolume) && currentVolume > 0) playlistPlayback.baseVolume = currentVolume;
+                if (!playlistPlayback.hasVolumeBaseline && Number.isFinite(currentVolume) && currentVolume > 0) {
+                  playlistPlayback.baseVolume = Math.max(1, Math.min(100, currentVolume));
+                  playlistPlayback.hasVolumeBaseline = true;
+                }
               } catch {}
-              event.target.setVolume(0);
+              playlistPlayback.volumeMode = "starting";
+              playlistPlayback.resumeVolume = 0;
+              preparePlaylistPlayerForFadeStart_(event.target);
             }
             event.target.playVideo();
           } catch (err) {
@@ -2823,7 +2830,7 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
-        if (playlistPlayback && playlistPlayback.active) startPlaylistVolumeFadeIn_();
+        if (playlistPlayback && playlistPlayback.active) handlePlaylistPlaybackPlaying_();
         startPlaylistSegmentWatcher_();
         break;
       case YT.PlayerState.BUFFERING:
@@ -2844,6 +2851,7 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 0);
+        if (playlistPlayback && playlistPlayback.active) handlePlaylistPlaybackPaused_();
         break;
       case YT.PlayerState.ENDED:
         setMediaSessionPlaybackState_("none");
@@ -4282,6 +4290,14 @@
     if (!els.playlistItems) return;
     const nowMode = playlistModalMode === "now" && Boolean(playlistPlayback && playlistPlayback.active);
 
+    els.playlistItems.querySelectorAll("[data-playlist-remove-id]").forEach(button => {
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        removeSongFromSelectedPlaylist(button.dataset.playlistRemoveId || "", { confirm: true });
+      });
+    });
+
     if (nowMode) {
       els.playlistItems.querySelectorAll(".playlist-item-row[data-playlist-now-index]").forEach(row => {
         row.addEventListener("click", event => {
@@ -4289,17 +4305,11 @@
           const index = Number(row.dataset.playlistNowIndex || -1);
           if (!Number.isInteger(index) || index < 0) return;
           closePlaylistModal();
-          playPlaylistItemAt_(index);
+          playPlaylistItemAt_(index, { captureCurrentVolume: true });
         });
       });
       return;
     }
-
-    els.playlistItems.querySelectorAll("[data-playlist-remove-id]").forEach(button => {
-      button.addEventListener("click", () => {
-        removeSongFromSelectedPlaylist(button.dataset.playlistRemoveId || "");
-      });
-    });
 
     els.playlistItems.querySelectorAll("[data-playlist-check-id]").forEach(input => {
       input.addEventListener("change", updatePlaylistBulkButtons_);
@@ -4713,13 +4723,7 @@
     }
 
     if (playlistHasItem_(selected, `song:${id}`)) {
-      selected.items = selected.items.filter(item => getPlaylistItemKey_(item) !== `song:${id}`);
-      savePlaylists();
-      renderPlaylistSummary();
-      renderPlaylistManager();
-      refreshPlaylistAddButtonStates_();
-      addLikeClickFeedback(button);
-      showCooldownText(`${getDisplayTitle(song)} 곡을 ${selected.name}에서 제거했습니다.`);
+      removeSongFromSelectedPlaylist(`song:${id}`, { confirm: true, song });
       return;
     }
 
@@ -4733,15 +4737,57 @@
     showCooldownText(`${getDisplayTitle(song)} 곡을 ${selected.name}에 추가했습니다.`);
   }
 
-  function removeSongFromSelectedPlaylist(id) {
+  function removeSongFromSelectedPlaylist(id, options = {}) {
     const selected = getSelectedPlaylist();
-    if (!selected) return;
+    if (!selected) return false;
     const key = String(id || "").includes(":") ? String(id || "") : `song:${id}`;
-    selected.items = selected.items.filter(item => getPlaylistItemKey_(item) !== key);
+    const item = selected.items.find(entry => getPlaylistItemKey_(entry) === key);
+    if (!item) return false;
+
+    const playable = getPlaylistPlayableItem_(item);
+    const label = playable && playable.title || (options.song && getDisplayTitle(options.song)) || "이 곡";
+    if (options.confirm && !window.confirm(`${label} 을(를) 현재 플레이리스트에서 삭제할까요?`)) return false;
+
+    selected.items = selected.items.filter(entry => getPlaylistItemKey_(entry) !== key);
     savePlaylists();
+    const removedCurrent = removePlaylistItemFromActivePlayback_(selected.id, key);
     renderPlaylistManager();
     renderPlaylistSummary();
     refreshPlaylistAddButtonStates_();
+    if (!removedCurrent) renderPlaylistPlaybackUi_();
+    showCooldownText(`${label} 곡을 ${selected.name}에서 제거했습니다.`);
+    return true;
+  }
+
+  function removePlaylistItemFromActivePlayback_(listId, key) {
+    if (!playlistPlayback || !playlistPlayback.active || !playlistPlayback.list || playlistPlayback.list.id !== listId) return false;
+
+    const currentKey = getPlaylistItemKey_(playlistPlayback.queue[playlistPlayback.index]);
+    const removeIndex = playlistPlayback.queue.findIndex(item => getPlaylistItemKey_(item) === key);
+    if (removeIndex < 0) return false;
+
+    playlistPlayback.queue = playlistPlayback.queue.filter(item => getPlaylistItemKey_(item) !== key);
+    playlistPlayback.list.items = playlistPlayback.list.items.filter(item => getPlaylistItemKey_(item) !== key);
+
+    if (!playlistPlayback.queue.length) {
+      finishPlaylistPlayback_();
+      return true;
+    }
+
+    if (currentKey === key) {
+      const nextIndex = removeIndex < playlistPlayback.queue.length ? removeIndex : (playlistPlayback.repeat ? 0 : -1);
+      if (nextIndex < 0) finishPlaylistPlayback_();
+      else playPlaylistItemAt_(nextIndex);
+      return true;
+    }
+
+    if (removeIndex < playlistPlayback.index) playlistPlayback.index = Math.max(0, playlistPlayback.index - 1);
+    playlistModalQueuePreview = playlistModalMode === "now" ? {
+      id: playlistPlayback.list && playlistPlayback.list.id || "",
+      name: playlistPlayback.list && playlistPlayback.list.name || "플레이리스트",
+      items: [...(playlistPlayback.queue || [])]
+    } : playlistModalQueuePreview;
+    return false;
   }
 
   function startPlaylistPlayback(mode = "sequential") {
@@ -4770,12 +4816,15 @@
       index: 0,
       currentEnd: 0,
       baseVolume: 100,
+      hasVolumeBaseline: false,
+      resumeVolume: 0,
+      volumeMode: "starting",
       fadingOut: false,
       finished: false
     };
 
     closePlaylistModal();
-    playPlaylistItemAt_(0);
+    playPlaylistItemAt_(0, { captureCurrentVolume: false });
   }
 
   function buildPlaylistQueue_(list, mode, options = {}) {
@@ -4870,8 +4919,10 @@
     return [];
   }
 
-  function playPlaylistItemAt_(index) {
+  function playPlaylistItemAt_(index, options = {}) {
     if (!playlistPlayback || !playlistPlayback.active) return;
+    const playOptions = options || {};
+    if (playOptions.captureCurrentVolume) rememberPlaylistPlaybackVolume_();
     clearPlaylistSegmentWatcher_();
     clearPlaylistSkipTimer_();
     clearPlaylistVolumeFade_();
@@ -4889,6 +4940,8 @@
     playlistPlayback.index = index;
     playlistPlayback.finished = false;
     playlistPlayback.currentEnd = playable.hasSegment ? playable.end : 0;
+    playlistPlayback.volumeMode = "starting";
+    playlistPlayback.resumeVolume = 0;
 
     const token = ++youtubePlayerToken;
     youtubeStartedPlaying = false;
@@ -4938,6 +4991,8 @@
 
   function playNextPlaylistItem_(reason = "next") {
     if (!playlistPlayback || !playlistPlayback.active) return;
+    const shouldCaptureVolume = reason === "manual" || reason === "ended";
+    if (shouldCaptureVolume) rememberPlaylistPlaybackVolume_();
     clearPlaylistSegmentWatcher_();
     clearPlaylistSkipTimer_();
 
@@ -5004,9 +5059,81 @@
 
   function playPreviousPlaylistItem_() {
     if (!playlistPlayback || !playlistPlayback.active) return;
+    rememberPlaylistPlaybackVolume_();
     let prevIndex = playlistPlayback.index - 1;
     if (prevIndex < 0) prevIndex = playlistPlayback.repeat ? playlistPlayback.queue.length - 1 : 0;
-    playPlaylistItemAt_(prevIndex);
+    playPlaylistItemAt_(prevIndex, { captureCurrentVolume: false });
+  }
+
+  function rememberPlaylistPlaybackVolume_() {
+    if (!playlistPlayback || !playlistPlayback.active) return;
+    const currentVolume = getPlaylistCurrentVolume_(playlistPlayback.baseVolume);
+    if (Number.isFinite(currentVolume) && currentVolume > 1) {
+      playlistPlayback.baseVolume = Math.max(1, Math.min(100, currentVolume));
+      playlistPlayback.hasVolumeBaseline = true;
+      playlistPlayback.resumeVolume = 0;
+    }
+    setPlaylistVolumeImmediately_(0);
+  }
+
+  function preparePlaylistPlayerForFadeStart_(player) {
+    if (!player) return;
+    try { if (typeof player.mute === "function") player.mute(); } catch {}
+    try { if (typeof player.setVolume === "function") player.setVolume(0); } catch {}
+  }
+
+  function releasePlaylistPlayerForFade_(player, volume) {
+    if (!player) return;
+    const safeVolume = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)));
+    try { if (typeof player.setVolume === "function") player.setVolume(safeVolume); } catch {}
+    try { if (typeof player.unMute === "function") player.unMute(); } catch {}
+    try { if (typeof player.setVolume === "function") player.setVolume(safeVolume); } catch {}
+  }
+
+  function getPlaylistCurrentVolume_(fallback = 0) {
+    try {
+      const value = Number(youtubePlayer && youtubePlayer.getVolume && youtubePlayer.getVolume());
+      if (Number.isFinite(value)) return Math.max(0, Math.min(100, value));
+    } catch {}
+    return Math.max(0, Math.min(100, Number(fallback) || 0));
+  }
+
+  function setPlaylistVolumeImmediately_(volume) {
+    if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+    try { youtubePlayer.setVolume(Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))); } catch {}
+  }
+
+  function getPlaylistFadeTargetVolume_() {
+    const resumeVolume = Number(playlistPlayback && playlistPlayback.resumeVolume);
+    if (Number.isFinite(resumeVolume) && resumeVolume > 0) return Math.max(0, Math.min(100, resumeVolume));
+    return Math.max(0, Math.min(100, Number(playlistPlayback && playlistPlayback.baseVolume) || 100));
+  }
+
+  function handlePlaylistPlaybackPlaying_() {
+    if (!playlistPlayback || !playlistPlayback.active) return;
+    const mode = playlistPlayback.volumeMode || "starting";
+    if (mode !== "starting" && mode !== "paused") return;
+
+    const target = getPlaylistFadeTargetVolume_();
+    const nextMode = mode === "paused" ? "resuming" : "fadingIn";
+    playlistPlayback.volumeMode = nextMode;
+    preparePlaylistPlayerForFadeStart_(youtubePlayer);
+    startPlaylistVolumeFadeIn_(target, () => {
+      if (playlistPlayback && playlistPlayback.active && playlistPlayback.volumeMode === nextMode) {
+        playlistPlayback.volumeMode = "normal";
+        playlistPlayback.resumeVolume = 0;
+      }
+    });
+  }
+
+  function handlePlaylistPlaybackPaused_() {
+    if (!playlistPlayback || !playlistPlayback.active || playlistPlayback.finished) return;
+    clearPlaylistVolumeFade_();
+    const currentVolume = getPlaylistCurrentVolume_(playlistPlayback.baseVolume);
+    if (currentVolume > 0) playlistPlayback.resumeVolume = currentVolume;
+    else if (!Number(playlistPlayback.resumeVolume)) playlistPlayback.resumeVolume = Number(playlistPlayback.baseVolume) || 100;
+    playlistPlayback.volumeMode = "paused";
+    setPlaylistVolumeImmediately_(0);
   }
 
   function startPlaylistSegmentWatcher_() {
@@ -5019,7 +5146,13 @@
       try { current = Number(youtubePlayer.getCurrentTime() || 0); } catch { return; }
       const remaining = playlistPlayback.currentEnd - current;
 
-      if (remaining <= PLAYLIST_FADE_DURATION_MS / 1000 && remaining > 0.08 && !playlistPlayback.fadingOut) {
+      if (remaining > PLAYLIST_END_FADE_TRIGGER_SECONDS && playlistPlayback.fadingOut) {
+        playlistPlayback.fadingOut = false;
+        if (playlistPlayback.volumeMode === "ending") playlistPlayback.volumeMode = "normal";
+        clearPlaylistVolumeFade_();
+      }
+
+      if (remaining <= PLAYLIST_END_FADE_TRIGGER_SECONDS && remaining > 0.08 && !playlistPlayback.fadingOut) {
         playlistPlayback.fadingOut = true;
         startPlaylistVolumeFadeOut_(Math.max(240, remaining * 1000));
       }
@@ -5035,10 +5168,10 @@
     }, PLAYLIST_END_CHECK_INTERVAL_MS);
   }
 
-  function startPlaylistVolumeFadeIn_() {
+  function startPlaylistVolumeFadeIn_(targetVolume, onDone) {
     if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
-    const target = Math.max(0, Math.min(100, Number(playlistPlayback.baseVolume) || 100));
-    runPlaylistVolumeFade_(0, target, PLAYLIST_FADE_DURATION_MS, t => 1 - Math.pow(1 - t, 3));
+    const target = Math.max(0, Math.min(100, Number(targetVolume) || Number(playlistPlayback.baseVolume) || 100));
+    runPlaylistVolumeFade_(0, target, PLAYLIST_FADE_DURATION_MS, t => 1 - Math.pow(1 - t, 3), onDone, { muteUntilAudible: true });
   }
 
   function startPlaylistVolumeFadeOut_(durationMs = PLAYLIST_FADE_DURATION_MS) {
@@ -5048,30 +5181,45 @@
       const currentVolume = Number(youtubePlayer.getVolume && youtubePlayer.getVolume());
       if (Number.isFinite(currentVolume)) from = currentVolume;
     } catch {}
+    playlistPlayback.volumeMode = "ending";
     runPlaylistVolumeFade_(from, 0, durationMs, t => Math.pow(t, 3));
   }
 
-  function runPlaylistVolumeFade_(from, to, durationMs, easing) {
+  function runPlaylistVolumeFade_(from, to, durationMs, easing, onDone, options = {}) {
     clearPlaylistVolumeFade_();
     if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
 
+    const fadePlayer = youtubePlayer;
+    const fadeSeq = ++playlistVolumeFadeSeq;
     const start = performance.now();
     const duration = Math.max(120, Number(durationMs) || PLAYLIST_FADE_DURATION_MS);
     const fromValue = Math.max(0, Math.min(100, Number(from) || 0));
     const toValue = Math.max(0, Math.min(100, Number(to) || 0));
+    let audioReleased = !(options && options.muteUntilAudible && toValue > fromValue);
+    if (!audioReleased) preparePlaylistPlayerForFadeStart_(fadePlayer);
 
     const tick = () => {
-      if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+      if (fadeSeq !== playlistVolumeFadeSeq || youtubePlayer !== fadePlayer) return;
+      if (!fadePlayer || typeof fadePlayer.setVolume !== "function") return;
       const elapsed = performance.now() - start;
       const progress = Math.min(1, elapsed / duration);
       const eased = typeof easing === "function" ? easing(progress) : progress;
       const value = fromValue + (toValue - fromValue) * eased;
-      try { youtubePlayer.setVolume(Math.max(0, Math.min(100, Math.round(value)))); } catch { return; }
+      const safeValue = Math.max(0, Math.min(100, Math.round(value)));
+      try {
+        if (!audioReleased && (progress > 0 || safeValue > 0)) {
+          releasePlaylistPlayerForFade_(fadePlayer, safeValue);
+          audioReleased = true;
+        } else {
+          fadePlayer.setVolume(safeValue);
+        }
+      } catch { return; }
 
       if (progress < 1) {
-        playlistVolumeFadeTimer = window.setTimeout(tick, 80);
+        playlistVolumeFadeTimer = window.setTimeout(tick, 50);
       } else {
         playlistVolumeFadeTimer = null;
+        if (typeof onDone === "function") onDone();
       }
     };
 
@@ -5079,6 +5227,7 @@
   }
 
   function clearPlaylistVolumeFade_() {
+    playlistVolumeFadeSeq += 1;
     if (playlistVolumeFadeTimer) {
       window.clearTimeout(playlistVolumeFadeTimer);
       playlistVolumeFadeTimer = null;

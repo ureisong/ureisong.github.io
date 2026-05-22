@@ -80,7 +80,7 @@ select {
 input::placeholder { color: var(--muted); }
 
 button {
-  padding: 10px 14px;
+  padding: 10px 14px 11px 14px;
   cursor: pointer;
   font-weight: 800;
 }
@@ -1584,7 +1584,7 @@ html.dark-mode .playlist-add-button {
 .playlist-modal-card {
   position: relative;
   width: min(720px, calc(100vw - 36px));
-  max-height: min(82vh, 780px);
+  max-height: min(82dvh, 780px);
   padding: 28px 22px 22px;
   display: grid;
   gap: 12px;
@@ -1610,7 +1610,7 @@ html.dark-mode .playlist-add-button {
 .playlist-items {
   display: grid;
   gap: 8px;
-  max-height: min(46vh, 420px);
+  max-height: min(46dvh, 420px);
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -1633,13 +1633,12 @@ html.dark-mode .playlist-add-button {
 .playlist-now-playing-mode #playlistActionRow,
 .playlist-now-playing-mode .playlist-bulk-row,
 .playlist-now-playing-mode .playlist-item-check-wrap,
-.playlist-now-playing-mode .playlist-item-mobile-move,
-.playlist-now-playing-mode .playlist-item-remove {
+.playlist-now-playing-mode .playlist-item-mobile-move {
   display: none !important;
 }
 
 .playlist-now-playing-mode .playlist-item-row {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   cursor: default;
 }
 
@@ -1925,6 +1924,9 @@ html.dark-mode .playlist-item-row-added-pulse {
     justify-content: center;
     flex-wrap: wrap;
   }
+
+  .playlist-player-controls-options { order: 1; }
+  .playlist-player-controls-main { order: 2; }
 
   .playlist-player-controls button {
     flex: 1 1 auto;
