@@ -1448,7 +1448,7 @@ html.dark-mode .default-spinner {
   .controls,
   .panel-body { padding: 14px; }
   .filter-details > summary,
-  .panel-summary { padding: 14px; }
+  .panel-summary { padding: 16px 14px 14px 14px; }
 
   .tab-buttons,
   .date-sort-buttons {
