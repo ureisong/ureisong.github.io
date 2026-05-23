@@ -171,6 +171,7 @@
     playlistShowListButton: document.getElementById("playlistShowListButton"),
     playlistOrderToggleButton: document.getElementById("playlistOrderToggleButton"),
     playlistRepeatPlayerToggle: document.getElementById("playlistRepeatPlayerToggle"),
+    playlistBurninShieldButton: document.getElementById("playlistBurninShieldButton"),
     likeDisabledModal: document.getElementById("likeDisabledModal"),
     likeDisabledModalClose: document.getElementById("likeDisabledModalClose"),
     likeNoticeModalMessage: document.getElementById("likeNoticeModalMessage"),
@@ -244,6 +245,14 @@
   let playlistFinishedCloseArmed = false;
   let cooldownCrossfadeTimer = null;
   let cooldownClearTimer = null;
+  let youtubeClosePulseTimer = null;
+  let burninShieldEl = null;
+  let burninShieldTextEl = null;
+  let burninShieldLoopTimer = null;
+  let burninShieldVisibleTimer = null;
+  let burninShieldFullscreenTarget = null;
+  let dateGroupLongPressTimer = null;
+  let dateGroupLongPressPointerId = null;
   let suppressPageLoadingForInitialShare = false;
 
   document.addEventListener("DOMContentLoaded", init);
@@ -461,6 +470,10 @@
         closeYoutubeModal();
         return;
       }
+      if (playlistPlayback && playlistPlayback.active) {
+        if (event.target === els.youtubeModal) pulseYoutubeModalCloseButton_();
+        return;
+      }
       if (event.target === els.youtubeModal) closeYoutubeModal();
     });
 
@@ -471,8 +484,20 @@
       el.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
+        if (el.dataset.modalLongPressFilter === "1") {
+          el.dataset.modalLongPressFilter = "";
+          return;
+        }
         copyModalInfoText_(el);
       });
+      el.addEventListener("contextmenu", event => {
+        if (!isDesktopContextCopyEnabled()) return;
+        if (!isModalInfoFilterAllowed_(el)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        applyModalInfoFilter_(el, event.target);
+      });
+      bindModalInfoLongPressFilter_(el);
     });
 
     if (els.playlistSummaryName) {
@@ -1265,6 +1290,48 @@
     }
   }
 
+  function isMobileLongPressCopyEnabled_() {
+    if (!window.matchMedia) return false;
+    return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+  }
+
+  function clearDateGroupLongPressTimer_() {
+    if (dateGroupLongPressTimer) {
+      window.clearTimeout(dateGroupLongPressTimer);
+      dateGroupLongPressTimer = null;
+    }
+    dateGroupLongPressPointerId = null;
+  }
+
+  function bindMobileDateGroupLongPress_(button) {
+    if (!button || button.dataset.mobileLongPressBound === "1") return;
+    button.dataset.mobileLongPressBound = "1";
+
+    button.addEventListener("pointerdown", event => {
+      if (!isMobileLongPressCopyEnabled_()) return;
+      if (event.pointerType === "mouse") return;
+      if (event.target && event.target.closest && event.target.closest(".date-group-count")) return;
+      clearDateGroupLongPressTimer_();
+      dateGroupLongPressPointerId = event.pointerId;
+      dateGroupLongPressTimer = window.setTimeout(() => {
+        dateGroupLongPressTimer = null;
+        button.dataset.longPressCopied = "1";
+        window.setTimeout(() => {
+          if (button.dataset.longPressCopied === "1") button.dataset.longPressCopied = "";
+        }, 900);
+        copyDateGroupInfoToClipboard(button.dataset.dateGroupToggle || "");
+        showCooldownText("그룹 정보를 클립보드에 복사했습니다.");
+      }, 650);
+    });
+
+    ["pointerup", "pointercancel", "pointerleave"].forEach(type => {
+      button.addEventListener(type, event => {
+        if (dateGroupLongPressPointerId !== null && event.pointerId !== dateGroupLongPressPointerId) return;
+        clearDateGroupLongPressTimer_();
+      });
+    });
+  }
+
   function makeDateGroupCopyText(group) {
     const dateText = getDateGroupCopyDateText(group);
     const items = [...(group.items || [])].sort(compareSongIdAsc);
@@ -1357,8 +1424,12 @@
     }
   }
 
+  function getModalInfoText_(el) {
+    return String(el && (el.dataset.copyText || el.textContent) || "").trim();
+  }
+
   async function copyModalInfoText_(el) {
-    const text = String(el && (el.dataset.copyText || el.textContent) || "").trim();
+    const text = getModalInfoText_(el);
     if (!text) return;
 
     try {
@@ -1368,6 +1439,116 @@
       console.warn("[클립보드 복사 실패]", err);
       showCooldownText("클립보드 복사에 실패했습니다.");
     }
+  }
+
+  function getModalInfoFilterType_(el) {
+    if (el === els.modalSongArtist) return "artist";
+    return "search";
+  }
+
+  function isModalInfoFilterAllowed_(el) {
+    if (!el) return false;
+    if (!currentModalSongId) return false;
+    return Boolean(findSongById(currentModalSongId));
+  }
+
+  function getModalArtistFilterValueFromTarget_(target) {
+    const part = target && target.closest && target.closest("[data-modal-filter-value]");
+    return part ? String(part.dataset.modalFilterValue || "").trim() : "";
+  }
+
+  function getModalArtistFilterValues_(text) {
+    return String(text || "")
+      .split(/\s+&\s+/)
+      .map(value => value.trim())
+      .filter(Boolean);
+  }
+
+  function selectModalArtistFilterValue_(values) {
+    const list = values.filter(Boolean);
+    if (list.length <= 1) return list[0] || "";
+
+    const message = [
+      "필터를 적용할 아티스트 번호를 입력해주세요.",
+      "",
+      ...list.map((value, index) => `${index + 1}. ${value}`)
+    ].join("\n");
+    const selected = window.prompt(message, "1");
+    if (selected === null) return "";
+
+    const index = Number(String(selected).trim()) - 1;
+    if (Number.isInteger(index) && index >= 0 && index < list.length) return list[index];
+
+    const direct = String(selected || "").trim();
+    return list.find(value => value === direct) || "";
+  }
+
+  function applyModalFilterValue_(type, text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    if (!window.confirm(`"${value}" 으로 필터를 적용할까요?`)) return;
+
+    closeYoutubeModal();
+    resetFilters();
+    applyFilterResultPanelState();
+    if (els.filterDetails) els.filterDetails.open = true;
+    if (els.searchInput) els.searchInput.value = value;
+    if (els.searchMode) els.searchMode.value = type === "artist" ? "artist" : "title";
+    applyAndRender(true);
+    collapseNonDateSections();
+    scrollToFilterSection();
+  }
+
+  function applyModalInfoFilter_(el, target = null) {
+    if (!isModalInfoFilterAllowed_(el)) return;
+
+    const type = getModalInfoFilterType_(el);
+    const baseText = getModalInfoText_(el);
+    if (!baseText) return;
+
+    let text = baseText;
+    if (type === "artist") {
+      text = getModalArtistFilterValueFromTarget_(target) || selectModalArtistFilterValue_(getModalArtistFilterValues_(baseText));
+    }
+
+    applyModalFilterValue_(type, text);
+  }
+
+  function bindModalInfoLongPressFilter_(el) {
+    if (!el || el.dataset.modalLongPressFilterBound === "1") return;
+    el.dataset.modalLongPressFilterBound = "1";
+    let timer = null;
+    let pointerId = null;
+
+    const clear = () => {
+      if (timer) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      pointerId = null;
+    };
+
+    el.addEventListener("pointerdown", event => {
+      if (!isMobileLongPressCopyEnabled_()) return;
+      if (event.pointerType === "mouse") return;
+      clear();
+      pointerId = event.pointerId;
+      timer = window.setTimeout(() => {
+        timer = null;
+        el.dataset.modalLongPressFilter = "1";
+        window.setTimeout(() => {
+          if (el.dataset.modalLongPressFilter === "1") el.dataset.modalLongPressFilter = "";
+        }, 900);
+        applyModalInfoFilter_(el, event.target);
+      }, 650);
+    });
+
+    ["pointerup", "pointercancel", "pointerleave"].forEach(type => {
+      el.addEventListener(type, event => {
+        if (pointerId !== null && event.pointerId !== pointerId) return;
+        clear();
+      });
+    });
   }
 
   function getDateGroupsBySortMode(songs) {
@@ -1663,7 +1844,13 @@
         });
       }
 
-      button.addEventListener("click", () => {
+      button.addEventListener("click", event => {
+        if (button.dataset.longPressCopied === "1") {
+          event.preventDefault();
+          event.stopPropagation();
+          button.dataset.longPressCopied = "";
+          return;
+        }
         const key = button.dataset.dateGroupToggle || "";
         const body = root.querySelector(`[data-date-group-body="${cssEscape(key)}"]`);
         if (!body) return;
@@ -1693,6 +1880,7 @@
           const key = button.dataset.dateGroupToggle || "";
           copyDateGroupInfoToClipboard(key);
         });
+        bindMobileDateGroupLongPress_(button);
       }
     });
   }
@@ -2438,7 +2626,26 @@
     }
   }
 
-  function setModalScrollingText_(el, text) {
+  function appendModalScrollingTextContent_(inner, value, options = {}) {
+    const text = String(value || "");
+    const artistParts = options.artistParts === true ? getModalArtistFilterValues_(text) : [];
+
+    if (artistParts.length <= 1) {
+      inner.textContent = text;
+      return;
+    }
+
+    artistParts.forEach((part, index) => {
+      if (index > 0) inner.appendChild(document.createTextNode(" & "));
+      const span = document.createElement("span");
+      span.className = "modal-filter-part";
+      span.dataset.modalFilterValue = part;
+      span.textContent = part;
+      inner.appendChild(span);
+    });
+  }
+
+  function setModalScrollingText_(el, text, options = {}) {
     if (!el) return;
 
     const value = String(text || "");
@@ -2451,7 +2658,7 @@
 
     const inner = document.createElement("span");
     inner.className = "modal-marquee-inner";
-    inner.textContent = value;
+    appendModalScrollingTextContent_(inner, value, options);
     el.appendChild(inner);
 
     window.requestAnimationFrame(() => {
@@ -2471,7 +2678,7 @@
   }
 
   function setModalArtistText_(text) {
-    setModalScrollingText_(els.modalSongArtist, text);
+    setModalScrollingText_(els.modalSongArtist, text, { artistParts: true });
   }
 
   function setModalFooterText(text) {
@@ -2675,6 +2882,7 @@
   }
 
   function closeYoutubeModal() {
+    closeBurninShield_();
     disarmPlaylistFinishedClose_();
     youtubePlayerToken += 1;
     els.youtubeModal.hidden = true;
@@ -4238,8 +4446,11 @@
             <input class="playlist-item-check" type="checkbox" data-playlist-check-id="${escapeHtml(key)}" aria-label="선택" />
           </label>
           <div class="playlist-item-main">
-            <strong>${index + 1}. ${escapeHtml(titleText)}</strong>
-            <span>${escapeHtml(meta)}</span>
+            <div class="playlist-item-title-line">
+              <span class="playlist-item-index">${index + 1}. </span>
+              ${nowMode ? `<strong class="playlist-item-title-marquee" data-playlist-title-text="${escapeHtml(titleText)}"><span class="modal-marquee-inner">${escapeHtml(titleText)}</span></strong>` : `<strong>${escapeHtml(titleText)}</strong>`}
+            </div>
+            <span class="playlist-item-meta">${escapeHtml(meta)}</span>
           </div>
           <div class="playlist-item-mobile-move" aria-label="모바일 순서 변경">
             <button class="playlist-item-move-button" type="button" data-playlist-move-id="${escapeHtml(key)}" data-playlist-move-step="-1" ${index === 0 ? "disabled" : ""} aria-label="위로 이동">↑</button>
@@ -4252,6 +4463,7 @@
 
     bindPlaylistItemRowEvents_();
     updatePlaylistBulkButtons_();
+    applyPlaylistItemTitleMarquee_();
     applyPlaylistPendingFocus_();
     scrollPlaylistCurrentItemIntoView_();
   }
@@ -4276,13 +4488,39 @@
     scrollPlaylistItemIntoCenter_(els.playlistItems.querySelector(".playlist-item-row-current"));
   }
 
+  function applyPlaylistItemTitleMarquee_() {
+    if (!els.playlistItems) return;
+    els.playlistItems.querySelectorAll(".playlist-item-title-marquee").forEach(title => {
+      const inner = title.querySelector(".modal-marquee-inner");
+      if (!inner) return;
+      title.classList.remove("modal-marquee-active");
+      title.style.removeProperty("--modal-marquee-distance");
+      title.style.removeProperty("--modal-marquee-duration");
+      window.requestAnimationFrame(() => {
+        const distance = Math.ceil(inner.scrollWidth - title.clientWidth);
+        if (distance <= 2) return;
+        const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+        const totalSeconds = 4 + moveSeconds * 2;
+        title.style.setProperty("--modal-marquee-distance", `${distance}px`);
+        title.style.setProperty("--modal-marquee-duration", `${totalSeconds}s`);
+        title.classList.add("modal-marquee-active");
+      });
+    });
+  }
+
   function scrollPlaylistItemIntoCenter_(row) {
     if (!row || !els.playlistItems) return;
     const container = els.playlistItems;
     if (container.scrollHeight <= container.clientHeight + 1) return;
     window.requestAnimationFrame(() => {
-      const top = row.offsetTop - (container.clientHeight / 2) + (row.offsetHeight / 2);
-      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      window.requestAnimationFrame(() => {
+        const rowRect = row.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const rawTop = container.scrollTop + (rowRect.top - containerRect.top) - ((container.clientHeight - rowRect.height) / 2);
+        const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        const top = Math.max(0, Math.min(maxTop, rawTop));
+        container.scrollTo({ top, behavior: "smooth" });
+      });
     });
   }
 
@@ -4466,6 +4704,7 @@
       els.playlistNameInput.dataset.action = "";
     }
     updatePlaylistDeleteButtonText_();
+    updatePlaylistNameActionButtons_();
   }
 
   function showPlaylistNameInput_(action) {
@@ -4475,6 +4714,7 @@
     els.playlistNameInput.dataset.action = action;
     els.playlistNameInput.hidden = false;
     updatePlaylistDeleteButtonText_();
+    updatePlaylistNameActionButtons_();
     window.setTimeout(() => els.playlistNameInput && els.playlistNameInput.focus(), 20);
   }
 
@@ -4493,6 +4733,14 @@
 
     els.playlistDeleteButton.textContent = "삭제";
     els.playlistDeleteButton.disabled = playlists.length <= 1;
+  }
+
+  function updatePlaylistNameActionButtons_() {
+    const visible = isPlaylistNameInputVisible_();
+    const action = visible && els.playlistNameInput ? String(els.playlistNameInput.dataset.action || "") : "";
+
+    if (els.playlistCreateButton) els.playlistCreateButton.disabled = action === "rename";
+    if (els.playlistRenameButton) els.playlistRenameButton.disabled = action === "create";
   }
 
   function playlistNameExists_(name, excludeId = "") {
@@ -4639,10 +4887,121 @@
     }
   }
 
+  function pulseYoutubeModalCloseButton_() {
+    if (!els.youtubeModalClose) return;
+    els.youtubeModalClose.classList.remove("modal-close-attention");
+    void els.youtubeModalClose.offsetWidth;
+    els.youtubeModalClose.classList.add("modal-close-attention");
+    if (youtubeClosePulseTimer) window.clearTimeout(youtubeClosePulseTimer);
+    youtubeClosePulseTimer = window.setTimeout(() => {
+      els.youtubeModalClose && els.youtubeModalClose.classList.remove("modal-close-attention");
+      youtubeClosePulseTimer = null;
+    }, 3000);
+  }
+
+  function isMobileBurninShieldEnabled_() {
+    if (!window.matchMedia) return false;
+    return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+  }
+
+  function getBurninFullscreenTarget_() {
+    if (els.youtubeModal && !els.youtubeModal.hidden) return els.youtubeModal;
+    return document.documentElement;
+  }
+
+  async function requestBurninFullscreen_(target) {
+    if (!target || !target.requestFullscreen) return;
+    try {
+      await target.requestFullscreen();
+      burninShieldFullscreenTarget = target;
+    } catch {
+      burninShieldFullscreenTarget = null;
+    }
+  }
+
+  function ensureBurninShield_(parent = document.body) {
+    if (!burninShieldEl) {
+      burninShieldEl = document.createElement("div");
+      burninShieldEl.className = "burnin-shield";
+      burninShieldEl.hidden = true;
+
+      burninShieldTextEl = document.createElement("div");
+      burninShieldTextEl.className = "burnin-shield-text";
+      burninShieldEl.appendChild(burninShieldTextEl);
+
+      burninShieldEl.addEventListener("click", closeBurninShield_);
+    }
+    const targetParent = parent && parent.appendChild ? parent : document.body;
+    if (burninShieldEl.parentNode !== targetParent) targetParent.appendChild(burninShieldEl);
+    return burninShieldEl;
+  }
+
+  function getBurninCurrentSongTexts_() {
+    const title = els.modalSongTitle ? String(els.modalSongTitle.dataset.copyText || els.modalSongTitle.textContent || "").trim() : "";
+    const artist = els.modalSongArtist ? String(els.modalSongArtist.dataset.copyText || els.modalSongArtist.textContent || "").trim() : "";
+    return {
+      title: title || "재생 중",
+      artist: artist || ""
+    };
+  }
+
+  function scheduleBurninShieldText_() {
+    if (!burninShieldEl || burninShieldEl.hidden || !burninShieldTextEl) return;
+    const fadeMs = 1150;
+    const holdMs = 2000;
+    const cooldownMs = 12000;
+    const { title, artist } = getBurninCurrentSongTexts_();
+    burninShieldTextEl.classList.remove("show");
+    const x = 12 + Math.random() * 76;
+    const y = 14 + Math.random() * 72;
+    burninShieldTextEl.style.left = `${x}%`;
+    burninShieldTextEl.style.top = `${y}%`;
+    burninShieldTextEl.innerHTML = `<div>재생 중 · 탭하면 돌아가기</div><div>&nbsp;</div><div>${escapeHtml(title)}</div><div>${escapeHtml(artist)}</div>`;
+    window.requestAnimationFrame(() => {
+      if (!burninShieldTextEl) return;
+      burninShieldTextEl.classList.add("show");
+    });
+    if (burninShieldVisibleTimer) window.clearTimeout(burninShieldVisibleTimer);
+    burninShieldVisibleTimer = window.setTimeout(() => {
+      if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
+    }, fadeMs + holdMs);
+    if (burninShieldLoopTimer) window.clearTimeout(burninShieldLoopTimer);
+    burninShieldLoopTimer = window.setTimeout(scheduleBurninShieldText_, fadeMs + holdMs + fadeMs + cooldownMs);
+  }
+
+  async function openBurninShield_() {
+    if (!isMobileBurninShieldEnabled_()) return;
+    const target = getBurninFullscreenTarget_();
+    const shield = ensureBurninShield_(target === document.documentElement ? document.body : target);
+    await requestBurninFullscreen_(target);
+    shield.hidden = false;
+    document.body.classList.add("burnin-shield-open");
+    scheduleBurninShieldText_();
+  }
+
+  async function closeBurninShield_() {
+    if (burninShieldLoopTimer) {
+      window.clearTimeout(burninShieldLoopTimer);
+      burninShieldLoopTimer = null;
+    }
+    if (burninShieldVisibleTimer) {
+      window.clearTimeout(burninShieldVisibleTimer);
+      burninShieldVisibleTimer = null;
+    }
+    if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
+    if (burninShieldEl) burninShieldEl.hidden = true;
+    document.body.classList.remove("burnin-shield-open");
+    if (document.fullscreenElement && burninShieldFullscreenTarget) {
+      try { await document.exitFullscreen(); } catch {}
+    }
+    burninShieldFullscreenTarget = null;
+  }
+
   function bindPlaylistPlayerEvents() {
     if (els.playlistPrevTrackButton) els.playlistPrevTrackButton.addEventListener("click", () => playPreviousPlaylistItem_());
     if (els.playlistNextTrackButton) els.playlistNextTrackButton.addEventListener("click", () => playNextPlaylistItem_("manual"));
     if (els.playlistShowListButton) els.playlistShowListButton.addEventListener("click", () => openPlaylistModal("now"));
+    if (els.playlistBurninShieldButton) els.playlistBurninShieldButton.addEventListener("click", openBurninShield_);
     if (els.playlistOrderToggleButton) {
       els.playlistOrderToggleButton.addEventListener("click", () => {
         if (!playlistPlayback) return;
@@ -4759,6 +5118,16 @@
     return true;
   }
 
+  function syncNowPlayingPlaylistPreview_() {
+    if (playlistModalMode !== "now" || !playlistPlayback || !playlistPlayback.active) return;
+    playlistModalQueuePreview = {
+      id: playlistPlayback.list && playlistPlayback.list.id || "",
+      name: playlistPlayback.list && playlistPlayback.list.name || "플레이리스트",
+      items: [...(playlistPlayback.queue || [])]
+    };
+    playlistModalQueuePreviewListId = playlistModalQueuePreview.id;
+  }
+
   function removePlaylistItemFromActivePlayback_(listId, key) {
     if (!playlistPlayback || !playlistPlayback.active || !playlistPlayback.list || playlistPlayback.list.id !== listId) return false;
 
@@ -4769,6 +5138,8 @@
     playlistPlayback.queue = playlistPlayback.queue.filter(item => getPlaylistItemKey_(item) !== key);
     playlistPlayback.list.items = playlistPlayback.list.items.filter(item => getPlaylistItemKey_(item) !== key);
 
+    syncNowPlayingPlaylistPreview_();
+
     if (!playlistPlayback.queue.length) {
       finishPlaylistPlayback_();
       return true;
@@ -4778,15 +5149,13 @@
       const nextIndex = removeIndex < playlistPlayback.queue.length ? removeIndex : (playlistPlayback.repeat ? 0 : -1);
       if (nextIndex < 0) finishPlaylistPlayback_();
       else playPlaylistItemAt_(nextIndex);
+      syncNowPlayingPlaylistPreview_();
+      if (playlistModalMode === "now" && els.playlistModal && !els.playlistModal.hidden) renderPlaylistManager();
       return true;
     }
 
     if (removeIndex < playlistPlayback.index) playlistPlayback.index = Math.max(0, playlistPlayback.index - 1);
-    playlistModalQueuePreview = playlistModalMode === "now" ? {
-      id: playlistPlayback.list && playlistPlayback.list.id || "",
-      name: playlistPlayback.list && playlistPlayback.list.name || "플레이리스트",
-      items: [...(playlistPlayback.queue || [])]
-    } : playlistModalQueuePreview;
+    syncNowPlayingPlaylistPreview_();
     return false;
   }
 
