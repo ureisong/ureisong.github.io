@@ -895,6 +895,14 @@ html.dark-mode .like-button.liking {
   border-radius: 20px 20px 0 0;
 }
 
+
+.modal-song-title,
+.modal-song-artist {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .modal-song-info-bottom {
   border-radius: 0 0 20px 20px;
   color: #cbd5e1;
@@ -1959,6 +1967,14 @@ body.burnin-shield-open {
   background: #000;
 }
 
+
+.modal-song-title,
+.modal-song-artist {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .modal-song-info-bottom {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2009,7 +2025,15 @@ body.burnin-shield-open {
     display: none;
   }
 
-  .modal-song-info-bottom {
+  
+.modal-song-title,
+.modal-song-artist {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.modal-song-info-bottom {
     grid-template-columns: auto minmax(0, 1fr) auto;
     text-align: center;
   }
@@ -2169,7 +2193,15 @@ html.dark-mode #playlistPlayRandomButton {
     min-width: 31px;
   }
 
-  .modal-song-info-bottom {
+  
+.modal-song-title,
+.modal-song-artist {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.modal-song-info-bottom {
     position: relative;
     display: flex;
     align-items: center;
@@ -2209,7 +2241,8 @@ html.dark-mode #playlistPlayRandomButton {
   }
 
   .playlist-player-controls-options button {
-    min-height: 34px;
+    min-height: 44px;
+    padding: 7px 6px 8px 6px;
   }
 }
 

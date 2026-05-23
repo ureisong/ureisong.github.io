@@ -488,6 +488,10 @@
           el.dataset.modalLongPressFilter = "";
           return;
         }
+        if (el.dataset.modalSuppressNextClick === "1") {
+          el.dataset.modalSuppressNextClick = "";
+          return;
+        }
         copyModalInfoText_(el);
       });
       el.addEventListener("contextmenu", event => {
@@ -1519,6 +1523,9 @@
     el.dataset.modalLongPressFilterBound = "1";
     let timer = null;
     let pointerId = null;
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchTriggered = false;
 
     const clear = () => {
       if (timer) {
@@ -1528,18 +1535,28 @@
       pointerId = null;
     };
 
+    const markLongPressHandled = () => {
+      el.dataset.modalLongPressFilter = "1";
+      el.dataset.modalSuppressNextClick = "1";
+      window.setTimeout(() => {
+        if (el.dataset.modalLongPressFilter === "1") el.dataset.modalLongPressFilter = "";
+        if (el.dataset.modalSuppressNextClick === "1") el.dataset.modalSuppressNextClick = "";
+      }, 900);
+    };
+
+    const triggerFilter = target => {
+      markLongPressHandled();
+      applyModalInfoFilter_(el, target);
+    };
+
     el.addEventListener("pointerdown", event => {
       if (!isMobileLongPressCopyEnabled_()) return;
-      if (event.pointerType === "mouse") return;
+      if (event.pointerType === "mouse" || event.pointerType === "touch") return;
       clear();
       pointerId = event.pointerId;
       timer = window.setTimeout(() => {
         timer = null;
-        el.dataset.modalLongPressFilter = "1";
-        window.setTimeout(() => {
-          if (el.dataset.modalLongPressFilter === "1") el.dataset.modalLongPressFilter = "";
-        }, 900);
-        applyModalInfoFilter_(el, event.target);
+        triggerFilter(event.target);
       }, 650);
     });
 
@@ -1548,6 +1565,48 @@
         if (pointerId !== null && event.pointerId !== pointerId) return;
         clear();
       });
+    });
+
+    el.addEventListener("touchstart", event => {
+      if (!isMobileLongPressCopyEnabled_()) return;
+      const touch = event.touches && event.touches[0];
+      if (!touch) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clear();
+      touchTriggered = false;
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      timer = window.setTimeout(() => {
+        timer = null;
+        touchTriggered = true;
+        triggerFilter(event.target);
+      }, 650);
+    }, { passive: false });
+
+    el.addEventListener("touchmove", event => {
+      if (!isMobileLongPressCopyEnabled_() || !timer) return;
+      const touch = event.touches && event.touches[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientX - touchStartX) > 12 || Math.abs(touch.clientY - touchStartY) > 12) clear();
+    }, { passive: true });
+
+    ["touchend", "touchcancel"].forEach(type => {
+      el.addEventListener(type, event => {
+        if (!isMobileLongPressCopyEnabled_()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const wasTap = Boolean(timer) && !touchTriggered;
+        clear();
+        if (type === "touchend" && wasTap) {
+          el.dataset.modalSuppressNextClick = "1";
+          window.setTimeout(() => {
+            if (el.dataset.modalSuppressNextClick === "1") el.dataset.modalSuppressNextClick = "";
+          }, 600);
+          copyModalInfoText_(el);
+        }
+        touchTriggered = false;
+      }, { passive: false });
     });
   }
 
@@ -2757,6 +2816,8 @@
   function setupMediaSessionPlaybackControls_() {
     if (!("mediaSession" in navigator) || typeof navigator.mediaSession.setActionHandler !== "function") return;
 
+    setMediaSessionMetadata_();
+
     setMediaSessionActionHandler_("play", () => {
       if (youtubePlayer && typeof youtubePlayer.playVideo === "function") {
         try { youtubePlayer.playVideo(); } catch (err) { console.warn("Media Session 재생 처리 실패", err); }
@@ -2768,6 +2829,34 @@
         try { youtubePlayer.pauseVideo(); } catch (err) { console.warn("Media Session 일시정지 처리 실패", err); }
       }
     });
+
+    if (playlistPlayback && playlistPlayback.active && !playlistPlayback.finished) {
+      setMediaSessionActionHandler_("previoustrack", () => playPreviousPlaylistItem_());
+      setMediaSessionActionHandler_("nexttrack", () => playNextPlaylistItem_("manual"));
+    } else {
+      setMediaSessionActionHandler_("previoustrack", null);
+      setMediaSessionActionHandler_("nexttrack", null);
+    }
+  }
+
+  function setMediaSessionMetadata_() {
+    if (!("mediaSession" in navigator) || typeof window.MediaMetadata !== "function") return;
+
+    const title = els.modalSongTitle ? String(els.modalSongTitle.dataset.copyText || els.modalSongTitle.textContent || "").trim() : "";
+    const artist = els.modalSongArtist ? String(els.modalSongArtist.dataset.copyText || els.modalSongArtist.textContent || "").trim() : "";
+    const album = playlistPlayback && playlistPlayback.active && playlistPlayback.list
+      ? String(playlistPlayback.list.name || "유레이 노래방")
+      : "유레이 노래방";
+
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: title || "유레이 노래방",
+        artist: artist || "",
+        album
+      });
+    } catch (err) {
+      console.warn("Media Session 메타데이터 설정 실패", err);
+    }
   }
 
   function setMediaSessionActionHandler_(action, handler) {
@@ -2793,6 +2882,9 @@
 
     setMediaSessionActionHandler_("play", null);
     setMediaSessionActionHandler_("pause", null);
+    setMediaSessionActionHandler_("previoustrack", null);
+    setMediaSessionActionHandler_("nexttrack", null);
+    try { navigator.mediaSession.metadata = null; } catch {}
     setMediaSessionPlaybackState_("none");
   }
 
@@ -4945,6 +5037,27 @@
     };
   }
 
+  function positionBurninShieldTextSafely_() {
+    if (!burninShieldEl || !burninShieldTextEl) return;
+
+    const shieldRect = burninShieldEl.getBoundingClientRect();
+    const textRect = burninShieldTextEl.getBoundingClientRect();
+    const margin = 18;
+    const safeWidth = Math.max(1, shieldRect.width - margin * 2);
+    const safeHeight = Math.max(1, shieldRect.height - margin * 2);
+    const halfWidth = Math.min(textRect.width / 2, safeWidth / 2);
+    const halfHeight = Math.min(textRect.height / 2, safeHeight / 2);
+    const minX = margin + halfWidth;
+    const maxX = Math.max(minX, shieldRect.width - margin - halfWidth);
+    const minY = margin + halfHeight;
+    const maxY = Math.max(minY, shieldRect.height - margin - halfHeight);
+    const x = minX + Math.random() * Math.max(0, maxX - minX);
+    const y = minY + Math.random() * Math.max(0, maxY - minY);
+
+    burninShieldTextEl.style.left = `${x}px`;
+    burninShieldTextEl.style.top = `${y}px`;
+  }
+
   function scheduleBurninShieldText_() {
     if (!burninShieldEl || burninShieldEl.hidden || !burninShieldTextEl) return;
     const fadeMs = 1150;
@@ -4952,14 +5065,14 @@
     const cooldownMs = 12000;
     const { title, artist } = getBurninCurrentSongTexts_();
     burninShieldTextEl.classList.remove("show");
-    const x = 12 + Math.random() * 76;
-    const y = 14 + Math.random() * 72;
-    burninShieldTextEl.style.left = `${x}%`;
-    burninShieldTextEl.style.top = `${y}%`;
     burninShieldTextEl.innerHTML = `<div>재생 중 · 탭하면 돌아가기</div><div>&nbsp;</div><div>${escapeHtml(title)}</div><div>${escapeHtml(artist)}</div>`;
     window.requestAnimationFrame(() => {
       if (!burninShieldTextEl) return;
-      burninShieldTextEl.classList.add("show");
+      positionBurninShieldTextSafely_();
+      window.requestAnimationFrame(() => {
+        if (!burninShieldTextEl) return;
+        burninShieldTextEl.classList.add("show");
+      });
     });
     if (burninShieldVisibleTimer) window.clearTimeout(burninShieldVisibleTimer);
     burninShieldVisibleTimer = window.setTimeout(() => {
@@ -5396,6 +5509,8 @@
       else if (youtubePlayer && typeof youtubePlayer.pauseVideo === "function") youtubePlayer.pauseVideo();
     } catch {}
     renderPlaylistPlaybackUi_();
+    setupMediaSessionPlaybackControls_();
+    setMediaSessionPlaybackState_("none");
     showYoutubeLoadingMessage("플레이리스트 재생이 끝났습니다\n클릭하면 닫힙니다");
     armPlaylistFinishedClose_();
   }
