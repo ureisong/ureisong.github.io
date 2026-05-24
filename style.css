@@ -1132,7 +1132,7 @@ html.dark-mode .like-button.liking {
   position: relative;
   width: min(500px, calc(100vw - 42px));
   min-height: 170px;
-  padding: 34px 24px 30px;
+  padding: 24px 24px 30px 24px;
   display: grid;
   place-items: center;
   text-align: center;
@@ -1447,7 +1447,7 @@ html.dark-mode .default-spinner {
   .filter-grid { grid-template-columns: 1fr; }
   .controls,
   .panel-body { padding: 14px; }
-  .filter-details > summary,
+  .filter-details > summary { padding: 14px; }
   .panel-summary { padding: 16px 14px 14px 14px; }
 
   .tab-buttons,
@@ -1620,11 +1620,14 @@ html.dark-mode .playlist-add-button {
 .playlist-modal-card {
   position: relative;
   width: min(720px, calc(100vw - 36px));
+  height: min(82dvh, 780px);
   max-height: min(82dvh, 780px);
   padding: 28px 22px 22px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   overflow: visible;
+  min-height: 0;
   background: var(--card);
   color: var(--text);
   border: 1px solid var(--line);
@@ -1646,7 +1649,10 @@ html.dark-mode .playlist-add-button {
 .playlist-items {
   display: grid;
   gap: 8px;
-  max-height: min(46dvh, 420px);
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -2298,27 +2304,27 @@ html.playlist-disabled [data-playlist-feature] {
 }
 
 .playlist-bulk-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
   gap: 8px;
   align-items: center;
+  flex: 0 0 auto;
+  margin-top: 0;
 }
 
 .playlist-action-row > *,
-.playlist-play-row > *,
+.playlist-play-row > * {
+  min-width: 0;
+}
+
 .playlist-bulk-row > * {
+  flex: 1 1 0;
   min-width: 0;
 }
 
 @media (max-width: 720px) {
   .playlist-action-row,
-  .playlist-play-row,
-  .playlist-bulk-row {
+  .playlist-play-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .playlist-bulk-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .playlist-action-row button,
@@ -2328,6 +2334,7 @@ html.playlist-disabled [data-playlist-feature] {
     padding-right: 6px;
     white-space: nowrap;
   }
+
 }
 
 @media (min-width: 721px) {

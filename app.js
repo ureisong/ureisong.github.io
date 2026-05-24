@@ -237,6 +237,8 @@
   let playlistSkipTimer = null;
   let playlistVolumeFadeTimer = null;
   let playlistVolumeFadeSeq = 0;
+  let mediaSessionRefreshTimer = null;
+  let mediaSessionRefreshSeq = 0;
   let playlistModalMode = "manager";
   let playlistModalQueuePreview = null;
   let playlistModalQueuePreviewListId = "";
@@ -2813,6 +2815,10 @@
     }
   }
 
+  function isPlaylistMediaSessionActive_() {
+    return Boolean(playlistPlayback && playlistPlayback.active && !playlistPlayback.finished);
+  }
+
   function setupMediaSessionPlaybackControls_() {
     if (!("mediaSession" in navigator) || typeof navigator.mediaSession.setActionHandler !== "function") return;
 
@@ -2830,13 +2836,65 @@
       }
     });
 
-    if (playlistPlayback && playlistPlayback.active && !playlistPlayback.finished) {
-      setMediaSessionActionHandler_("previoustrack", () => playPreviousPlaylistItem_());
-      setMediaSessionActionHandler_("nexttrack", () => playNextPlaylistItem_("manual"));
+    if (isPlaylistMediaSessionActive_()) {
+      setMediaSessionActionHandler_("previoustrack", () => handleMediaSessionPreviousTrack_());
+      setMediaSessionActionHandler_("nexttrack", () => handleMediaSessionNextTrack_());
+      setMediaSessionActionHandler_("seekbackward", () => handleMediaSessionPreviousTrack_());
+      setMediaSessionActionHandler_("seekforward", () => handleMediaSessionNextTrack_());
+      startMediaSessionRefresh_();
     } else {
       setMediaSessionActionHandler_("previoustrack", null);
       setMediaSessionActionHandler_("nexttrack", null);
+      setMediaSessionActionHandler_("seekbackward", null);
+      setMediaSessionActionHandler_("seekforward", null);
+      stopMediaSessionRefresh_();
     }
+  }
+
+  function handleMediaSessionPreviousTrack_() {
+    if (!isPlaylistMediaSessionActive_()) return;
+    playPreviousPlaylistItem_();
+    scheduleMediaSessionRefresh_();
+  }
+
+  function handleMediaSessionNextTrack_() {
+    if (!isPlaylistMediaSessionActive_()) return;
+    playNextPlaylistItem_("manual");
+    scheduleMediaSessionRefresh_();
+  }
+
+  function scheduleMediaSessionRefresh_() {
+    if (!isPlaylistMediaSessionActive_()) return;
+    const seq = ++mediaSessionRefreshSeq;
+    [0, 250, 800, 1600].forEach(delay => {
+      window.setTimeout(() => {
+        if (seq !== mediaSessionRefreshSeq || !isPlaylistMediaSessionActive_()) return;
+        setupMediaSessionPlaybackControls_();
+        setMediaSessionPlaybackState_(youtubeStartedPlaying ? "playing" : "none");
+      }, delay);
+    });
+  }
+
+  function startMediaSessionRefresh_() {
+    if (mediaSessionRefreshTimer || !isPlaylistMediaSessionActive_()) return;
+    mediaSessionRefreshTimer = window.setInterval(() => {
+      if (!isPlaylistMediaSessionActive_()) {
+        stopMediaSessionRefresh_();
+        return;
+      }
+      setMediaSessionMetadata_();
+      setMediaSessionActionHandler_("previoustrack", () => handleMediaSessionPreviousTrack_());
+      setMediaSessionActionHandler_("nexttrack", () => handleMediaSessionNextTrack_());
+      setMediaSessionActionHandler_("seekbackward", () => handleMediaSessionPreviousTrack_());
+      setMediaSessionActionHandler_("seekforward", () => handleMediaSessionNextTrack_());
+    }, 3000);
+  }
+
+  function stopMediaSessionRefresh_() {
+    mediaSessionRefreshSeq += 1;
+    if (!mediaSessionRefreshTimer) return;
+    window.clearInterval(mediaSessionRefreshTimer);
+    mediaSessionRefreshTimer = null;
   }
 
   function setMediaSessionMetadata_() {
@@ -2878,12 +2936,15 @@
   }
 
   function clearMediaSessionPlaybackControls_() {
+    stopMediaSessionRefresh_();
     if (!("mediaSession" in navigator) || typeof navigator.mediaSession.setActionHandler !== "function") return;
 
     setMediaSessionActionHandler_("play", null);
     setMediaSessionActionHandler_("pause", null);
     setMediaSessionActionHandler_("previoustrack", null);
     setMediaSessionActionHandler_("nexttrack", null);
+    setMediaSessionActionHandler_("seekbackward", null);
+    setMediaSessionActionHandler_("seekforward", null);
     try { navigator.mediaSession.metadata = null; } catch {}
     setMediaSessionPlaybackState_("none");
   }
@@ -3130,7 +3191,11 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
-        if (playlistPlayback && playlistPlayback.active) handlePlaylistPlaybackPlaying_();
+        if (playlistPlayback && playlistPlayback.active) {
+          handlePlaylistPlaybackPlaying_();
+          setupMediaSessionPlaybackControls_();
+          scheduleMediaSessionRefresh_();
+        }
         startPlaylistSegmentWatcher_();
         break;
       case YT.PlayerState.BUFFERING:
@@ -3151,7 +3216,10 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 0);
-        if (playlistPlayback && playlistPlayback.active) handlePlaylistPlaybackPaused_();
+        if (playlistPlayback && playlistPlayback.active) {
+          handlePlaylistPlaybackPaused_();
+          setupMediaSessionPlaybackControls_();
+        }
         break;
       case YT.PlayerState.ENDED:
         setMediaSessionPlaybackState_("none");
@@ -5446,6 +5514,7 @@
 
     renderPlaylistPlaybackUi_();
     setupMediaSessionPlaybackControls_();
+    scheduleMediaSessionRefresh_();
 
     renderYoutubeFrameMount_();
     els.youtubeModal.hidden = false;
@@ -5494,7 +5563,7 @@
         });
       }
     }
-    playPlaylistItemAt_(nextIndex);
+    playPlaylistItemAt_(nextIndex, { captureCurrentVolume: false });
   }
 
   function finishPlaylistPlayback_() {
