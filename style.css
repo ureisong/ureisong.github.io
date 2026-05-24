@@ -1941,7 +1941,13 @@ html.dark-mode .playlist-item-row-added-pulse {
   inset: 0;
   z-index: 2147483000;
   background: #000;
+  opacity: 1;
+  transition: opacity 0.55s ease;
   touch-action: manipulation;
+}
+
+.burnin-shield.closing {
+  opacity: 0;
 }
 
 .burnin-shield[hidden] {
@@ -1967,6 +1973,11 @@ html.dark-mode .playlist-item-row-added-pulse {
 
 .burnin-shield-text.show {
   opacity: 1;
+}
+
+.burnin-shield-song-title {
+  font-size: 1.14em;
+  font-weight: 900;
 }
 
 body.burnin-shield-open {

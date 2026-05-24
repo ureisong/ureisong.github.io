@@ -252,6 +252,7 @@
   let burninShieldTextEl = null;
   let burninShieldLoopTimer = null;
   let burninShieldVisibleTimer = null;
+  let burninShieldCloseTimer = null;
   let burninShieldFullscreenTarget = null;
   let dateGroupLongPressTimer = null;
   let dateGroupLongPressPointerId = null;
@@ -5089,7 +5090,7 @@
       burninShieldTextEl.className = "burnin-shield-text";
       burninShieldEl.appendChild(burninShieldTextEl);
 
-      burninShieldEl.addEventListener("click", closeBurninShield_);
+      burninShieldEl.addEventListener("click", handleBurninShieldTap_);
     }
     const targetParent = parent && parent.appendChild ? parent : document.body;
     if (burninShieldEl.parentNode !== targetParent) targetParent.appendChild(burninShieldEl);
@@ -5126,41 +5127,7 @@
     burninShieldTextEl.style.top = `${y}px`;
   }
 
-  function scheduleBurninShieldText_() {
-    if (!burninShieldEl || burninShieldEl.hidden || !burninShieldTextEl) return;
-    const fadeMs = 1150;
-    const holdMs = 2000;
-    const cooldownMs = 12000;
-    const { title, artist } = getBurninCurrentSongTexts_();
-    burninShieldTextEl.classList.remove("show");
-    burninShieldTextEl.innerHTML = `<div>재생 중 · 탭하면 돌아가기</div><div>&nbsp;</div><div>${escapeHtml(title)}</div><div>${escapeHtml(artist)}</div>`;
-    window.requestAnimationFrame(() => {
-      if (!burninShieldTextEl) return;
-      positionBurninShieldTextSafely_();
-      window.requestAnimationFrame(() => {
-        if (!burninShieldTextEl) return;
-        burninShieldTextEl.classList.add("show");
-      });
-    });
-    if (burninShieldVisibleTimer) window.clearTimeout(burninShieldVisibleTimer);
-    burninShieldVisibleTimer = window.setTimeout(() => {
-      if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
-    }, fadeMs + holdMs);
-    if (burninShieldLoopTimer) window.clearTimeout(burninShieldLoopTimer);
-    burninShieldLoopTimer = window.setTimeout(scheduleBurninShieldText_, fadeMs + holdMs + fadeMs + cooldownMs);
-  }
-
-  async function openBurninShield_() {
-    if (!isMobileBurninShieldEnabled_()) return;
-    const target = getBurninFullscreenTarget_();
-    const shield = ensureBurninShield_(target === document.documentElement ? document.body : target);
-    await requestBurninFullscreen_(target);
-    shield.hidden = false;
-    document.body.classList.add("burnin-shield-open");
-    scheduleBurninShieldText_();
-  }
-
-  async function closeBurninShield_() {
+  function clearBurninShieldTextTimers_() {
     if (burninShieldLoopTimer) {
       window.clearTimeout(burninShieldLoopTimer);
       burninShieldLoopTimer = null;
@@ -5169,13 +5136,103 @@
       window.clearTimeout(burninShieldVisibleTimer);
       burninShieldVisibleTimer = null;
     }
-    if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
-    if (burninShieldEl) burninShieldEl.hidden = true;
-    document.body.classList.remove("burnin-shield-open");
-    if (document.fullscreenElement && burninShieldFullscreenTarget) {
-      try { await document.exitFullscreen(); } catch {}
+  }
+
+  function setBurninShieldTextContent_() {
+    if (!burninShieldTextEl) return;
+    const { title, artist } = getBurninCurrentSongTexts_();
+    burninShieldTextEl.innerHTML = `<div>재생 중 · 탭하면 돌아가기</div><div>·</div><div class="burnin-shield-song-title">${escapeHtml(title)}</div><div>${escapeHtml(artist)}</div>`;
+  }
+
+  function showBurninShieldText_(holdMs = 2000, continueLoop = true) {
+    if (!burninShieldEl || burninShieldEl.hidden || !burninShieldTextEl) return;
+    const fadeMs = 1150;
+    const cooldownMs = 12000;
+
+    clearBurninShieldTextTimers_();
+    burninShieldTextEl.classList.remove("show");
+    setBurninShieldTextContent_();
+
+    window.requestAnimationFrame(() => {
+      if (!burninShieldTextEl || !burninShieldEl || burninShieldEl.hidden) return;
+      positionBurninShieldTextSafely_();
+      window.requestAnimationFrame(() => {
+        if (!burninShieldTextEl || !burninShieldEl || burninShieldEl.hidden) return;
+        burninShieldTextEl.classList.add("show");
+      });
+    });
+
+    burninShieldVisibleTimer = window.setTimeout(() => {
+      if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
+    }, fadeMs + holdMs);
+
+    if (continueLoop) {
+      burninShieldLoopTimer = window.setTimeout(scheduleBurninShieldText_, fadeMs + holdMs + fadeMs + cooldownMs);
     }
-    burninShieldFullscreenTarget = null;
+  }
+
+  function scheduleBurninShieldText_() {
+    showBurninShieldText_(2000, true);
+  }
+
+  function handleBurninShieldTap_(event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (!burninShieldEl || burninShieldEl.hidden || !burninShieldTextEl) return;
+
+    if (burninShieldTextEl.classList.contains("show")) {
+      closeBurninShield_(true);
+      return;
+    }
+
+    showBurninShieldText_(3000, true);
+  }
+
+  async function openBurninShield_() {
+    if (!isMobileBurninShieldEnabled_()) return;
+    const target = getBurninFullscreenTarget_();
+    const shield = ensureBurninShield_(target === document.documentElement ? document.body : target);
+    await requestBurninFullscreen_(target);
+    if (burninShieldCloseTimer) {
+      window.clearTimeout(burninShieldCloseTimer);
+      burninShieldCloseTimer = null;
+    }
+    shield.classList.remove("closing");
+    shield.hidden = false;
+    document.body.classList.add("burnin-shield-open");
+    scheduleBurninShieldText_();
+  }
+
+  async function closeBurninShield_(fade = false) {
+    clearBurninShieldTextTimers_();
+    if (burninShieldCloseTimer) {
+      window.clearTimeout(burninShieldCloseTimer);
+      burninShieldCloseTimer = null;
+    }
+    if (burninShieldTextEl) burninShieldTextEl.classList.remove("show");
+
+    const finishClose = async () => {
+      if (burninShieldEl) {
+        burninShieldEl.classList.remove("closing");
+        burninShieldEl.hidden = true;
+      }
+      document.body.classList.remove("burnin-shield-open");
+      if (document.fullscreenElement && burninShieldFullscreenTarget) {
+        try { await document.exitFullscreen(); } catch {}
+      }
+      burninShieldFullscreenTarget = null;
+      burninShieldCloseTimer = null;
+    };
+
+    if (fade && burninShieldEl && !burninShieldEl.hidden) {
+      burninShieldEl.classList.add("closing");
+      burninShieldCloseTimer = window.setTimeout(finishClose, 560);
+      return;
+    }
+
+    await finishClose();
   }
 
   function bindPlaylistPlayerEvents() {
