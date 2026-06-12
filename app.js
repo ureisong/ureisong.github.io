@@ -58,7 +58,7 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    "20260512_1_024", "20251104_1_016", "20251021_1_013", "20260512_1_008", "20260517_1_004",
+    "20260512_1_024", "20260605_2_003", "20260512_1_008", "20251104_1_016", "20251021_1_013", "20260517_1_004",
     {
       type: "external",
       key: "external:d68gIXrr_yY",
@@ -148,6 +148,7 @@
     playlistRepeatToggle: document.getElementById("playlistRepeatToggle"),
     playlistRemoveSelectedButton: document.getElementById("playlistRemoveSelectedButton"),
     playlistClearButton: document.getElementById("playlistClearButton"),
+    playlistReverseButton: document.getElementById("playlistReverseButton"),
     playlistFeatureElements: Array.from(document.querySelectorAll("[data-playlist-feature]")),
     playlistActionRow: document.getElementById("playlistActionRow"),
     youtubeModal: document.getElementById("youtubeModal"),
@@ -1774,6 +1775,18 @@
     return values.length ? [...new Set(values)] : [];
   }
 
+  function hasTtuddyaTitleMarker_(value) {
+    return String(value || "").includes(" [뜌땨]");
+  }
+
+  function formatDisplaySongTitleText_(value) {
+    return String(value || "").replaceAll(" [뜌땨]", " 🐤");
+  }
+
+  function getSongTitleTooltip_(song) {
+    return song && hasTtuddyaTitleMarker_(song.title) ? "뜌땨한 곡 입니다" : "";
+  }
+
   function getTitleValues(song) {
     const values = splitMultiValue(song.title);
     return values.length
@@ -1813,7 +1826,7 @@
   }
 
   function getDisplayTitle(song) {
-    const values = getTitleValues(song);
+    const values = getTitleValues(song).map(formatDisplaySongTitleText_);
     return values.length ? values.join(" ") : "곡명 없음";
   }
 
@@ -2192,9 +2205,11 @@
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
+    const titleTooltip = getSongTitleTooltip_(song);
+    const titleAttr = titleTooltip ? ` title="${escapeHtml(titleTooltip)}"` : "";
     const titleCoreHtml = song.link
-      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}">${escapeHtml(titleText)}</button>`
-      : `<span class="song-title-missing" title="다시보기가 없습니다">${escapeHtml(titleText)}</span>`;
+      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
+      : `<span class="song-title-missing" title="${escapeHtml(titleTooltip || "다시보기가 없습니다")}">${escapeHtml(titleText)}</span>`;
 
     const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
     const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
@@ -2737,6 +2752,10 @@
 
   function setModalTitleText_(text) {
     setModalScrollingText_(els.modalSongTitle, text);
+    if (!els.modalSongTitle) return;
+    const song = currentModalSongId ? allSongs.find(item => item.id === currentModalSongId) : null;
+    const tooltip = getSongTitleTooltip_(song);
+    if (tooltip) els.modalSongTitle.title = tooltip;
   }
 
   function setModalArtistText_(text) {
@@ -4592,6 +4611,8 @@
       const playable = getPlaylistPlayableItem_(item);
       const key = getPlaylistItemKey_(item);
       const titleText = playable ? playable.title : key;
+      const titleTooltip = playable && playable.type === "song" ? getSongTitleTooltip_(playable.song) : "";
+      const titleHoverAttr = titleTooltip ? ` title="${escapeHtml(titleTooltip)}"` : "";
       const meta = playable && playable.type === "song"
         ? [getRawDisplayArtist(playable.song), formatSongDateIso_(playable.song), [playable.song.timeline || "", playable.song.end || ""].filter(Boolean).join(" ~ ")].filter(Boolean).join(" · ")
         : playable
@@ -4609,7 +4630,7 @@
           <div class="playlist-item-main">
             <div class="playlist-item-title-line">
               <span class="playlist-item-index">${index + 1}. </span>
-              ${nowMode ? `<strong class="playlist-item-title-marquee" data-playlist-title-text="${escapeHtml(titleText)}"><span class="modal-marquee-inner">${escapeHtml(titleText)}</span></strong>` : `<strong>${escapeHtml(titleText)}</strong>`}
+              ${nowMode ? `<strong class="playlist-item-title-marquee" data-playlist-title-text="${escapeHtml(titleText)}"${titleHoverAttr}><span class="modal-marquee-inner">${escapeHtml(titleText)}</span></strong>` : `<strong${titleHoverAttr}>${escapeHtml(titleText)}</strong>`}
             </div>
             <span class="playlist-item-meta">${escapeHtml(meta)}</span>
           </div>
@@ -4766,12 +4787,16 @@
     if (playlistModalMode === "now") {
       if (els.playlistRemoveSelectedButton) els.playlistRemoveSelectedButton.disabled = true;
       if (els.playlistClearButton) els.playlistClearButton.disabled = true;
+      if (els.playlistReverseButton) els.playlistReverseButton.disabled = true;
       return;
     }
 
     const selected = getSelectedPlaylist();
     const checkedCount = els.playlistItems
       ? els.playlistItems.querySelectorAll("[data-playlist-check-id]:checked").length
+      : 0;
+    const totalCount = els.playlistItems
+      ? els.playlistItems.querySelectorAll("[data-playlist-check-id]").length
       : 0;
 
     if (els.playlistRemoveSelectedButton) {
@@ -4780,7 +4805,12 @@
     }
 
     if (els.playlistClearButton) {
-      els.playlistClearButton.disabled = !(selected && selected.items.length);
+      els.playlistClearButton.disabled = !(selected && selected.items.length) || totalCount === 0 || checkedCount === totalCount;
+      els.playlistClearButton.textContent = checkedCount && checkedCount < totalCount ? `전체선택 (${checkedCount}/${totalCount})` : "전체선택";
+    }
+
+    if (els.playlistReverseButton) {
+      els.playlistReverseButton.disabled = !(selected && selected.items.length > 1);
     }
   }
 
@@ -4839,11 +4869,18 @@
     renderPlaylistManager();
   }
 
-  function clearSelectedPlaylistItems_() {
+  function selectAllPlaylistItems_() {
+    if (!els.playlistItems) return;
+    els.playlistItems.querySelectorAll("[data-playlist-check-id]").forEach(input => {
+      input.checked = true;
+    });
+    updatePlaylistBulkButtons_();
+  }
+
+  function reverseSelectedPlaylistItems_() {
     const selected = getSelectedPlaylist();
-    if (!selected || !selected.items.length) return;
-    if (!window.confirm(`${selected.name}의 모든 곡을 삭제할까요?`)) return;
-    selected.items = [];
+    if (!selected || selected.items.length <= 1) return;
+    selected.items.reverse();
     savePlaylists();
     renderPlaylistManager();
   }
@@ -5028,7 +5065,11 @@
     }
 
     if (els.playlistClearButton) {
-      els.playlistClearButton.addEventListener("click", clearSelectedPlaylistItems_);
+      els.playlistClearButton.addEventListener("click", selectAllPlaylistItems_);
+    }
+
+    if (els.playlistReverseButton) {
+      els.playlistReverseButton.addEventListener("click", reverseSelectedPlaylistItems_);
     }
 
     if (els.playlistPlaySequentialButton) {
@@ -5397,6 +5438,14 @@
     return false;
   }
 
+  function getPlaylistPlaybackSourceItems_(list) {
+    if (!list || !Array.isArray(list.items)) return [];
+    const checkedIds = getCheckedPlaylistItemIds_();
+    if (!checkedIds.length) return list.items;
+    const checkedSet = new Set(checkedIds);
+    return list.items.filter(item => checkedSet.has(getPlaylistItemKey_(item)));
+  }
+
   function startPlaylistPlayback(mode = "sequential") {
     if (!playlistEnabled) return;
     const selected = getSelectedPlaylist();
@@ -5406,7 +5455,8 @@
       return;
     }
 
-    const validItems = selected.items.filter(item => getPlaylistPlayableItem_(item));
+    const sourceItems = getPlaylistPlaybackSourceItems_(selected);
+    const validItems = sourceItems.filter(item => getPlaylistPlayableItem_(item));
     if (!validItems.length) {
       showLikeNoticeModal("[알림]", "재생 가능한 곡이 없습니다.");
       return;
