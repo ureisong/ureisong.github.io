@@ -58,7 +58,7 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    "20260512_1_024", "20260605_2_003", "20260512_1_008", "20251104_1_016", "20251021_1_013", "20260517_1_004",
+    "20251104_1_016", "20251021_1_013",
     {
       type: "external",
       key: "external:d68gIXrr_yY",
@@ -1726,7 +1726,7 @@
     const map = new Map();
 
     [...songs].sort(compareDateDesc).forEach(song => {
-      const titleText = getDisplayTitle(song);
+      const titleText = getSungGroupTitleText_(song);
       const artistValues = getArtistValues(song);
 
       if (mode === "artist") {
@@ -1781,6 +1781,15 @@
 
   function formatDisplaySongTitleText_(value) {
     return String(value || "").replaceAll(" [뜌땨]", " 🐤");
+  }
+
+  function stripTtuddyaTitleMarker_(value) {
+    return String(value || "").replaceAll(" [뜌땨]", "").replaceAll(" 🐤", "").trim();
+  }
+
+  function getSungGroupTitleText_(song) {
+    const values = getTitleValues(song).map(stripTtuddyaTitleMarker_).filter(Boolean);
+    return values.length ? values.join(" ") : stripTtuddyaTitleMarker_(getDisplayTitle(song)) || "곡명 없음";
   }
 
   function getSongTitleTooltip_(song) {
