@@ -74,7 +74,7 @@
       일반 곡은 songs 시트의 id 문자열만
       "20250101_1_001",
 
-      커버곡/추천 팬 영상처럼 songs 시트에 없는 YouTube 영상은 아래 형식으로
+      커버곡/추천 플레이리스트처럼 songs 시트에 없는 YouTube 영상은 아래 형식으로
       {
         type: "external",
         key: "external:cover-example-video-id",
@@ -88,8 +88,8 @@
         key: "external:rec-example-video-id",
         url: "https://youtu.be/rec-example-video-id",
         videoId: "rec-example-video-id",
-        title: "기본 추천 팬 영상 예시 제목",
-        section: "추천 팬 영상"
+        title: "기본 추천 플레이리스트 예시 제목",
+        section: "추천 플레이리스트"
       }
     */
   ];
@@ -132,6 +132,13 @@
     recTrack: document.getElementById("recTrack"),
     recPrevButton: document.getElementById("recPrevButton"),
     recNextButton: document.getElementById("recNextButton"),
+    channelDetails: document.getElementById("channelDetails"),
+    channelDescription: document.getElementById("channelDescription"),
+    channelEmpty: document.getElementById("channelEmpty"),
+    channelCarousel: document.getElementById("channelCarousel"),
+    channelTrack: document.getElementById("channelTrack"),
+    channelPrevButton: document.getElementById("channelPrevButton"),
+    channelNextButton: document.getElementById("channelNextButton"),
     playlistOpenButton: document.getElementById("playlistOpenButton"),
     playlistSummaryName: document.getElementById("playlistSummaryName"),
     playlistModal: document.getElementById("playlistModal"),
@@ -208,6 +215,12 @@
   let recMoving = false;
   let recHover = false;
   let recAutoTimer = null;
+  let channelItems = [];
+  let channelIndex = 0;
+  let channelMoving = false;
+  let channelHover = false;
+  let channelAutoTimer = null;
+  const channelBorderStyles = new Map();
   let likePostEnabled = true;
   let currentModalSongId = "";
   let youtubePlayer = null;
@@ -287,6 +300,7 @@
     startCooldownTimer();
     startCoverAutoTimer();
     startRecAutoTimer();
+    startChannelAutoTimer();
     bindResponsiveRender();
     showPageLoading("...LOADING...", "설정 불러오는 중....");
     currentSettingsRows = await loadSettingsRows();
@@ -467,6 +481,30 @@
 
     if (els.recNextButton) {
       els.recNextButton.addEventListener("click", () => moveRecCarousel(1));
+    }
+
+    if (els.channelDetails) {
+      els.channelDetails.addEventListener("toggle", () => {
+        if (els.channelDetails.open) renderChannelSection();
+      });
+    }
+
+    if (els.channelCarousel) {
+      els.channelCarousel.addEventListener("mouseenter", () => { channelHover = true; });
+      els.channelCarousel.addEventListener("mouseleave", () => { channelHover = false; });
+      els.channelCarousel.addEventListener("touchstart", () => { channelHover = true; }, { passive: true });
+      els.channelCarousel.addEventListener("touchend", () => {
+        window.setTimeout(() => { channelHover = false; }, 1200);
+      }, { passive: true });
+      bindCarouselSwipe(els.channelCarousel, direction => moveChannelCarousel(direction));
+    }
+
+    if (els.channelPrevButton) {
+      els.channelPrevButton.addEventListener("click", () => moveChannelCarousel(-1));
+    }
+
+    if (els.channelNextButton) {
+      els.channelNextButton.addEventListener("click", () => moveChannelCarousel(1));
     }
 
     els.youtubeModal.addEventListener("click", event => {
@@ -724,6 +762,8 @@
           applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
           coverItems = normalizeCoverItems(cached.covers || []);
           recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
+          channelItems = normalizeChannelItems(cached.channels || []);
+          hydrateStoredCoverPlaylistEntries_();
           likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
           playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
           applyPlaylistEnabledState(playlistEnabled);
@@ -731,6 +771,7 @@
           renderFooter();
           renderCoverSection();
           renderRecSection();
+          renderChannelSection();
           buildFilters(allSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
@@ -744,6 +785,8 @@
       applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
       coverItems = normalizeCoverItems(payload.covers || []);
       recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
+      channelItems = normalizeChannelItems(payload.channels || []);
+      hydrateStoredCoverPlaylistEntries_();
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
       applyPlaylistEnabledState(playlistEnabled);
@@ -751,6 +794,7 @@
       renderFooter();
       renderCoverSection();
       renderRecSection();
+      renderChannelSection();
       writeLocalJsonCache({ 
         data: allSongs,
         notices: currentNoticeItems,
@@ -760,6 +804,7 @@
         h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true,
         covers: coverItems,
         recs: recItems,
+        channels: channelItems,
         settings: { like_post_enabled: likePostEnabled, playlist_enabled: playlistEnabled ? "TRUE" : "FALSE" },
         saved_at: Date.now()
       });
@@ -777,6 +822,8 @@
         applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
         coverItems = normalizeCoverItems(cached.covers || []);
         recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
+        channelItems = normalizeChannelItems(cached.channels || []);
+        hydrateStoredCoverPlaylistEntries_();
         likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
         playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
         applyPlaylistEnabledState(playlistEnabled);
@@ -784,6 +831,7 @@
         renderFooter();
         renderCoverSection();
         renderRecSection();
+        renderChannelSection();
         buildFilters(allSongs);
         applyAndRender(true);
         setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length} · ⓒ`);
@@ -832,6 +880,7 @@
       const notices = extractNoticeItemsFromRows(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
       const recs = extractRecItemsFromRows(noticeRows);
+      const channels = extractChannelItemsFromRows(noticeRows);
       const footerText = extractFooterTextFromRows(noticeRows);
       const pageMeta = extractPageMetaFromRows(noticeRows);
       const settings = extractSettingsFromRows(effectiveSettingsRows);
@@ -841,6 +890,7 @@
         notices,
         covers,
         recs,
+        channels,
         footerText,
         title: pageMeta.title,
         h1: pageMeta.h1,
@@ -860,6 +910,7 @@
       notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
       covers: Array.isArray(json) ? [] : (json.covers || []),
       recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
+      channels: Array.isArray(json) ? [] : (json.channels || []),
       footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
       title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
       h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
@@ -2044,6 +2095,7 @@
     if (els.recommendDetails) els.recommendDetails.open = false;
     if (els.sungDetails) els.sungDetails.open = false;
     if (els.recDetails) els.recDetails.open = false;
+    if (els.channelDetails) els.channelDetails.open = false;
     if (els.dateDetails) els.dateDetails.open = true;
   }
 
@@ -2066,6 +2118,7 @@
     if (els.dateDetails) els.dateDetails.open = true;
     if (els.sungDetails) els.sungDetails.open = false;
     if (els.recDetails) els.recDetails.open = false;
+    if (els.channelDetails) els.channelDetails.open = false;
   }
 
   function setActiveModeButton(attributeName, value) {
@@ -2432,6 +2485,7 @@
     applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
     coverItems = normalizeCoverItems(payload.covers || []);
     recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
+    channelItems = normalizeChannelItems(payload.channels || []);
     likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
     playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
     applyPlaylistEnabledState(playlistEnabled);
@@ -3739,9 +3793,13 @@
   function extractCoverItemsFromRows(rows) {
     return rows
       .filter(row => String(row.key || "").trim().toLowerCase() === "cover")
-      .map(row => makeCoverItemFromUrl(
+      .map((row, index) => makeCoverItemFromUrl(
         String(row.value || "").trim(),
-        { section: String(row.link || "").trim() === "TRUE" ? "오리지널 곡" : "커버곡" }
+        {
+          id: `COVER_${String(index + 1).padStart(5, "0")}`,
+          section: String(row.link || "").trim() === "TRUE" ? "오리지널 곡" : "커버곡",
+          thumbnail: String(row.img || "").trim()
+        }
       ))
       .filter(Boolean);
   }
@@ -3754,11 +3812,12 @@
     const section = String(options.section || "커버곡").trim() || "커버곡";
 
     return {
-      id: videoId,
+      id: String(options.id || videoId).trim() || videoId,
+      videoId,
       url: normalizedUrl,
       title: "커버곡을 불러오는 중...",
       section,
-      thumbnail: `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg`,
+      thumbnail: String(options.thumbnail || "").trim() || `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg`,
       fallbackThumbnail: `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`
     };
   }
@@ -3769,7 +3828,10 @@
       .map(item => {
         if (typeof item === "string") return makeCoverItemFromUrl(item);
         const url = String(item && item.url || item && item.value || "").trim();
-        const made = makeCoverItemFromUrl(url);
+        const made = makeCoverItemFromUrl(url, {
+          id: String(item && item.id || "").trim(),
+          thumbnail: String(item && item.thumbnail || item && item.img || "").trim()
+        });
         if (!made) return null;
         return {
           ...made,
@@ -3783,17 +3845,42 @@
   }
 
 
+  function parseRecommendedIdList_(value) {
+    const text = String(value || "").trim();
+    if (!text || /^https?:\/\//i.test(text)) return [];
+    const quoted = [...text.matchAll(/["']([^"']+)["']/g)].map(match => String(match[1] || "").trim()).filter(Boolean);
+    const values = quoted.length ? quoted : text.split(",").map(part => part.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+    return [...new Set(values.filter(value => /^[A-Za-z0-9_-]+$/.test(value)))];
+  }
+
   function extractRecItemsFromRows(rows) {
     return rows
       .filter(row => String(row.key || "").trim().toLowerCase() === "rec")
-      .map(row => makeRecItemFromUrl(
+      .map(row => makeRecItem_(
         String(row.value || "").trim(),
-        String(row.link || row.title || "").trim()
+        String(row.link || row.title || "").trim(),
+        String(row.img || "").trim()
       ))
       .filter(Boolean);
   }
 
-  function makeRecItemFromUrl(url, title = "") {
+  function makeRecItem_(value, title = "", thumbnail = "") {
+    const ids = parseRecommendedIdList_(value);
+    if (ids.length) {
+      return {
+        id: `rec_ids:${ids.join("|")}`,
+        ids,
+        title: String(title || "").trim() || `추천 플레이리스트 ${ids.length}곡`,
+        type: "id_list",
+        url: "",
+        thumbnail: String(thumbnail || "").trim(),
+        fallbackThumbnail: ""
+      };
+    }
+    return makeRecItemFromUrl(value, title, thumbnail);
+  }
+
+  function makeRecItemFromUrl(url, title = "", thumbnail = "") {
     const normalizedUrl = normalizeYoutubeUrlForParse(String(url || "").trim());
     if (!normalizedUrl) return null;
 
@@ -3804,8 +3891,8 @@
     return {
       id: videoId || playlistId,
       url: normalizedUrl,
-      title: String(title || "").trim() || "추천 팬 영상을 불러오는 중...",
-      thumbnail: videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg` : "",
+      title: String(title || "").trim() || "추천 플레이리스트를 불러오는 중...",
+      thumbnail: String(thumbnail || "").trim() || (videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg` : ""),
       fallbackThumbnail: videoId ? `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg` : "",
       type: playlistId && !videoId ? "playlist" : "video"
     };
@@ -3815,19 +3902,111 @@
     if (!Array.isArray(input)) return [];
     return shuffleArray(input
       .map(item => {
-        if (typeof item === "string") return makeRecItemFromUrl(item);
+        if (typeof item === "string") return makeRecItem_(item);
+        const ids = Array.isArray(item && item.ids) ? item.ids.map(value => String(value || "").trim()).filter(Boolean) : parseRecommendedIdList_(item && item.value || "");
+        if (String(item && item.type || "") === "id_list" || ids.length) {
+          return {
+            id: String(item && item.id || `rec_ids:${ids.join("|")}`).trim(),
+            ids,
+            title: String(item && item.title || "").trim() || `추천 플레이리스트 ${ids.length}곡`,
+            type: "id_list",
+            url: "",
+            thumbnail: String(item && item.thumbnail || item && item.img || "").trim(),
+            fallbackThumbnail: String(item && item.fallbackThumbnail || "").trim()
+          };
+        }
         const url = String(item && item.url || item && item.value || "").trim();
-        const made = makeRecItemFromUrl(url, String(item && item.title || "").trim());
+        const made = makeRecItemFromUrl(
+          url,
+          String(item && item.title || "").trim(),
+          String(item && item.thumbnail || item && item.img || "").trim()
+        );
         if (!made) return null;
         return {
           ...made,
-          title: String(item && item.title || made.title || "추천 팬 영상").trim() || "추천 팬 영상",
+          title: String(item && item.title || made.title || "추천 플레이리스트").trim() || "추천 플레이리스트",
           thumbnail: String(item && item.thumbnail || made.thumbnail || "").trim() || made.thumbnail,
           fallbackThumbnail: String(item && item.fallbackThumbnail || made.fallbackThumbnail || "").trim() || made.fallbackThumbnail,
           type: String(item && item.type || made.type || "video").trim() || "video"
         };
       })
       .filter(Boolean));
+  }
+
+  function normalizeYoutubeChannelUrl_(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+      const parsed = new URL(candidate);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "").replace(/^m\./, "");
+      if (host !== "youtube.com" && host !== "youtu.be") return "";
+      if (host === "youtu.be") return "";
+      const path = parsed.pathname.replace(/\/+$/, "");
+      if (!/^\/(?:@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)$/i.test(path)) return "";
+      return `https://www.youtube.com${path}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function getYoutubeChannelFallbackName_(url) {
+    try {
+      const path = new URL(url).pathname.replace(/\/+$/, "");
+      return decodeURIComponent(path.split("/").filter(Boolean).pop() || "YouTube 채널").replace(/^@/, "@");
+    } catch {
+      return "YouTube 채널";
+    }
+  }
+
+  function getYoutubeChannelAvatarFallback_(url) {
+    const name = getYoutubeChannelFallbackName_(url).replace(/^@/, "");
+    return `https://unavatar.io/youtube/${encodeURIComponent(name)}`;
+  }
+
+  function extractChannelItemsFromRows(rows) {
+    return rows
+      .filter(row => String(row.key || "").trim().toLowerCase() === "cha")
+      .map(row => makeChannelItem_(
+        String(row.value || "").trim(),
+        String(row.link || "").trim(),
+        String(row.img || "").trim()
+      ))
+      .filter(Boolean);
+  }
+
+  function makeChannelItem_(value, title = "", thumbnail = "") {
+    const url = normalizeYoutubeChannelUrl_(value);
+    if (!url) return null;
+    return {
+      id: url,
+      url,
+      title: String(title || "").trim() || getYoutubeChannelFallbackName_(url),
+      hasCustomTitle: Boolean(String(title || "").trim()),
+      thumbnail: String(thumbnail || "").trim() || getYoutubeChannelAvatarFallback_(url),
+      hasCustomThumbnail: Boolean(String(thumbnail || "").trim()),
+      enriched: false
+    };
+  }
+
+  function normalizeChannelItems(input) {
+    if (!Array.isArray(input)) return [];
+    return shuffleArray(input.map(item => {
+      if (typeof item === "string") return makeChannelItem_(item);
+      const made = makeChannelItem_(
+        item && (item.url || item.value),
+        item && item.title,
+        item && (item.thumbnail || item.img)
+      );
+      if (!made) return null;
+      return {
+        ...made,
+        hasCustomTitle: typeof item.hasCustomTitle === "boolean" ? item.hasCustomTitle : Boolean(String(item && item.title || "").trim()),
+        hasCustomThumbnail: typeof item.hasCustomThumbnail === "boolean" ? item.hasCustomThumbnail : Boolean(String(item && (item.thumbnail || item.img) || "").trim()),
+        thumbnail: String(item && (item.thumbnail || item.img) || made.thumbnail || "").trim() || made.thumbnail,
+        enriched: Boolean(item && item.enriched)
+      };
+    }).filter(Boolean));
   }
 
   function extractYoutubePlaylistId(url) {
@@ -3901,26 +4080,46 @@
     const isCenter = item._slot === 0;
     return `
       <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="cover" data-playlist-section="${escapeHtml(item.section || "커버곡")}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
-        <div class="cover-thumb-wrap">
-          <img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />
+        <div class="cover-thumb-wrap media-thumb-loading">
+          <img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />
         </div>
         <div class="cover-title" data-cover-title="${escapeHtml(item.id)}">${escapeHtml(item.title || "커버곡")}</div>
       </a>
     `;
   }
 
+  function bindMediaThumbnailLoading_(root) {
+    if (!root) return;
+    root.querySelectorAll(".cover-thumb-wrap img.cover-thumb").forEach(img => {
+      const wrap = img.closest(".cover-thumb-wrap");
+      if (!wrap) return;
+      const finish = () => {
+        wrap.classList.remove("media-thumb-loading");
+        wrap.classList.add("media-thumb-loaded");
+        if (wrap.classList.contains("channel-thumb-wrap")) wrap.classList.add("channel-border-ready");
+      };
+      img.addEventListener("load", finish, { once: true });
+      if (img.complete && img.naturalWidth > 0) finish();
+    });
+  }
+
   function bindCoverCards() {
     bindCarouselPlaylistAddCards_(els.coverTrack, "cover");
+    bindMediaThumbnailLoading_(els.coverTrack);
   }
 
   async function enrichCoverTitles(items) {
     const uniqueItems = items.filter(item => item && item.url && (!coverItems[item._actualIndex] || coverItems[item._actualIndex].title === "커버곡을 불러오는 중..."));
+    let changed = false;
     await Promise.all(uniqueItems.map(async item => {
       try {
         const title = await fetchYoutubeOembedTitle(item.url);
         if (!title) return;
         const target = coverItems[item._actualIndex];
-        if (target) target.title = title;
+        if (target && target.title !== title) {
+          target.title = title;
+          changed = true;
+        }
         if (els.coverTrack) {
           els.coverTrack.querySelectorAll(`[data-cover-title="${cssEscape(item.id)}"]`).forEach(el => {
             el.textContent = title;
@@ -3928,9 +4127,64 @@
         }
       } catch (err) {
         const target = coverItems[item._actualIndex];
-        if (target && target.title === "커버곡을 불러오는 중...") target.title = "YouTube 커버곡";
+        if (target && target.title === "커버곡을 불러오는 중...") {
+          target.title = "YouTube 커버곡";
+          changed = true;
+        }
       }
     }));
+    if (changed) {
+      persistCoverItemsToLocalCache_();
+      hydrateStoredCoverPlaylistEntries_();
+    }
+  }
+
+  function persistCoverItemsToLocalCache_() {
+    const cached = readLocalJsonCache();
+    if (!cached || typeof cached !== "object") return;
+    cached.covers = coverItems;
+    cached.saved_at = cached.saved_at || Date.now();
+    writeLocalJsonCache(cached);
+  }
+
+  function getStoredCoverItemById_(id) {
+    const key = String(id || "").trim();
+    if (!key) return null;
+    const current = coverItems.find(item => item.id === key) || null;
+    const cached = readLocalJsonCache();
+    const storedItems = normalizeCoverItems(cached && cached.covers || []);
+    const stored = storedItems.find(item => item.id === key) || null;
+    if (!current) return stored;
+    if (!stored) return current;
+    const currentPending = current.title === "커버곡을 불러오는 중...";
+    const storedReady = stored.title && stored.title !== "커버곡을 불러오는 중...";
+    return currentPending && storedReady ? { ...current, ...stored } : current;
+  }
+
+  function hydrateStoredCoverPlaylistEntries_() {
+    let changed = false;
+    playlists.forEach(list => {
+      if (!Array.isArray(list.items)) return;
+      list.items = list.items.map(item => {
+        if (!item || typeof item !== "object" || item.type !== "external") return item;
+        const match = String(item.key || "").match(/^external:(COVER_\d+)$/i);
+        if (!match) return item;
+        const cover = getStoredCoverItemById_(match[1]);
+        if (!cover) return item;
+        const next = {
+          ...item,
+          key: `external:${cover.id}`,
+          url: cover.url,
+          videoId: cover.videoId || extractYoutubeVideoId(cover.url),
+          playlistId: "",
+          title: cover.title || item.title || "커버곡",
+          section: cover.section || item.section || "커버곡"
+        };
+        if (JSON.stringify(next) !== JSON.stringify(item)) changed = true;
+        return next;
+      });
+    });
+    if (changed) savePlaylists();
   }
 
   async function fetchYoutubeOembedTitle(url) {
@@ -4014,7 +4268,7 @@
 
     const count = recItems.length;
     if (els.recDescription) {
-      els.recDescription.textContent = count ? `추천 팬 영상 ${count}개를 표시합니다.` : "표시할 추천 팬 영상이 없습니다.";
+      els.recDescription.textContent = count ? `추천 플레이리스트 ${count}개를 표시합니다.` : "표시할 추천 플레이리스트가 없습니다.";
     }
 
     if (!count) {
@@ -4033,6 +4287,7 @@
     const visible = getVisibleRecItems();
     els.recTrack.innerHTML = visible.map(item => renderCarouselMediaCard(item, "rec")).join("");
     bindRecCards();
+    bindMediaThumbnailLoading_(els.recTrack);
     enrichRecTitles(visible);
   }
 
@@ -4050,32 +4305,111 @@
     });
   }
 
+  function getRecommendedIdListThumbnail_(ids) {
+    for (const id of ids || []) {
+      const song = findSongById(id);
+      if (song) {
+        const videoId = extractYoutubeVideoId(song.link);
+        if (videoId) return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/maxresdefault.jpg`;
+      }
+      const cover = coverItems.find(item => item.id === id);
+      if (cover && cover.thumbnail) return cover.thumbnail;
+    }
+    return "";
+  }
+
   function renderCarouselMediaCard(item, kind) {
     const isCenter = item._slot === 0;
-    const title = item.title || (kind === "rec" ? "추천 팬 영상" : "커버곡");
+    const title = item.title || (kind === "rec" ? "추천 플레이리스트" : "커버곡");
     const indexAttr = kind === "rec" ? "data-rec-index" : "data-cover-index";
     const titleAttr = kind === "rec" ? "data-rec-title" : "data-cover-title";
-    const thumb = item.thumbnail
-      ? `<img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback){this.onerror=null;this.src=this.dataset.fallback;}else{this.remove();this.parentElement.classList.add('cover-thumb-placeholder');}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />`
-      : `<div class="cover-thumb-placeholder-content">${item.type === "playlist" ? "▶ LIST" : "▶"}</div>`;
-    const thumbClass = item.thumbnail ? "cover-thumb-wrap" : "cover-thumb-wrap cover-thumb-placeholder";
+    const isIdList = kind === "rec" && item.type === "id_list";
+    const displayThumbnail = item.thumbnail || (isIdList ? getRecommendedIdListThumbnail_(item.ids) : "");
+    const thumb = displayThumbnail
+      ? `<img class="cover-thumb" src="${escapeHtml(displayThumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />`
+      : `<div class="cover-thumb-placeholder-content">${isIdList ? `♫ ${item.ids.length}` : (item.type === "playlist" ? "▶ LIST" : "▶")}</div>`;
+    const thumbClass = displayThumbnail ? "cover-thumb-wrap media-thumb-loading" : "cover-thumb-wrap cover-thumb-placeholder";
+    const common = `class="cover-card ${isCenter ? "active" : "side"}" ${indexAttr}="${escapeHtml(item._actualIndex)}"`;
+    const openTag = isIdList
+      ? `<button type="button" ${common} data-rec-id-list="1" title="클릭하면 현재 플레이리스트에 곡을 추가합니다.">`
+      : `<a ${common} href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">`;
+    const closeTag = isIdList ? "</button>" : "</a>";
 
     return `
-      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" ${indexAttr}="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
+      ${openTag}
         <div class="${thumbClass}">
           ${thumb}
         </div>
         <div class="cover-title" ${titleAttr}="${escapeHtml(item.id)}">${escapeHtml(title)}</div>
-      </a>
+      ${closeTag}
     `;
   }
 
   function bindRecCards() {
     bindCarouselPlaylistAddCards_(els.recTrack, "rec");
+    if (!els.recTrack) return;
+    els.recTrack.querySelectorAll("[data-rec-id-list]").forEach(card => {
+      card.addEventListener("click", () => {
+        const index = Number(card.dataset.recIndex);
+        const item = Number.isInteger(index) ? recItems[index] : null;
+        if (item) addRecommendedIdsToCurrentPlaylist_(item);
+      });
+    });
+  }
+
+  async function resolveRecommendedPlaylistItem_(id) {
+    const key = String(id || "").trim();
+    if (!key) return null;
+    if (findSongById(key)) return key;
+    let cover = getStoredCoverItemById_(key);
+    if (!cover) return null;
+    if (!cover.title || cover.title === "커버곡을 불러오는 중...") {
+      const title = await fetchYoutubeOembedTitle(cover.url);
+      if (title) {
+        const current = coverItems.find(item => item.id === key);
+        if (current) current.title = title;
+        cover = { ...cover, title };
+        persistCoverItemsToLocalCache_();
+      }
+    }
+    return {
+      type: "external",
+      key: `external:${cover.id}`,
+      url: cover.url,
+      videoId: cover.videoId || extractYoutubeVideoId(cover.url),
+      playlistId: "",
+      title: cover.title || "커버곡",
+      section: cover.section || "커버곡"
+    };
+  }
+
+  async function addRecommendedIdsToCurrentPlaylist_(item) {
+    if (!playlistEnabled) return;
+    const selected = getSelectedPlaylist();
+    if (!selected) {
+      openPlaylistModal();
+      showLikeNoticeModal("[알림]", "먼저 플레이리스트를 생성하거나 선택해주세요.");
+      return;
+    }
+    const resolved = (await Promise.all((item.ids || []).map(resolveRecommendedPlaylistItem_))).filter(Boolean);
+    const additions = resolved.filter(entry => !playlistHasItem_(selected, entry));
+    if (!additions.length) {
+      showCooldownText("추가 가능한 곡이 없습니다.");
+      return;
+    }
+    const label = item.title || "추천 플레이리스트";
+    if (!window.confirm(`${label} 의 추가 가능한 ${additions.length}곡을 ‘${selected.name}’ 에 추가할까요?`)) return;
+    selected.items.push(...additions);
+    playlistPendingFocusKeys = additions.map(getPlaylistItemKey_);
+    savePlaylists();
+    renderPlaylistSummary();
+    refreshPlaylistAddButtonStates_();
+    openPlaylistModal();
+    showCooldownText(`${additions.length}곡을 ${selected.name}에 추가했습니다.`);
   }
 
   async function enrichRecTitles(items) {
-    const uniqueItems = items.filter(item => item && item.url && (!recItems[item._actualIndex] || recItems[item._actualIndex].title === "추천 팬 영상을 불러오는 중..."));
+    const uniqueItems = items.filter(item => item && item.url && (!recItems[item._actualIndex] || recItems[item._actualIndex].title === "추천 플레이리스트를 불러오는 중..."));
     await Promise.all(uniqueItems.map(async item => {
       try {
         const title = await fetchYoutubeOembedTitle(item.url);
@@ -4089,7 +4423,7 @@
         }
       } catch (err) {
         const target = recItems[item._actualIndex];
-        if (target && target.title === "추천 팬 영상을 불러오는 중...") target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 팬 영상";
+        if (target && target.title === "추천 플레이리스트를 불러오는 중...") target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 플레이리스트";
       }
     }));
   }
@@ -4125,6 +4459,125 @@
     if (recHover || recMoving) return false;
     if (recItems.length <= 1) return false;
     return isElementFullyVisible(els.recDetails);
+  }
+
+  function getChannelBorderStyle_(id) {
+    const key = String(id || "");
+    if (channelBorderStyles.has(key)) return channelBorderStyles.get(key);
+    const used = new Set(channelBorderStyles.values());
+    let style = "";
+    do {
+      const hueA = Math.floor(Math.random() * 360);
+      const hueB = (hueA + 45 + Math.floor(Math.random() * 225)) % 360;
+      const hueC = (hueB + 45 + Math.floor(Math.random() * 225)) % 360;
+      const angle = Math.floor(Math.random() * 360);
+      const width = 3 + Math.floor(Math.random() * 3);
+      style = `--channel-border-a:hsl(${hueA} 88% 62%);--channel-border-b:hsl(${hueB} 88% 62%);--channel-border-c:hsl(${hueC} 88% 62%);--channel-border-angle:${angle}deg;--channel-border-width:${width}px;`;
+    } while (used.has(style));
+    channelBorderStyles.set(key, style);
+    return style;
+  }
+
+  function renderChannelSection() {
+    if (!els.channelDetails || !els.channelTrack) return;
+    const count = channelItems.length;
+    if (els.channelDescription) els.channelDescription.textContent = count ? `추천 채널 ${count}개를 표시합니다.` : "표시할 추천 채널이 없습니다.";
+    if (!count) {
+      if (els.channelEmpty) els.channelEmpty.hidden = false;
+      if (els.channelCarousel) els.channelCarousel.hidden = true;
+      setChannelNavHidden(true);
+      els.channelTrack.innerHTML = "";
+      return;
+    }
+    if (els.channelEmpty) els.channelEmpty.hidden = true;
+    if (els.channelCarousel) els.channelCarousel.hidden = false;
+    setChannelNavHidden(false);
+    channelIndex = wrapIndex(channelIndex, count);
+    const visible = getVisibleChannelItems_();
+    els.channelTrack.innerHTML = visible.map(renderChannelCard_).join("");
+    bindMediaThumbnailLoading_(els.channelTrack);
+    enrichChannelItems_(visible);
+  }
+
+  function setChannelNavHidden(hidden) {
+    if (els.channelPrevButton) els.channelPrevButton.hidden = Boolean(hidden);
+    if (els.channelNextButton) els.channelNextButton.hidden = Boolean(hidden);
+  }
+
+  function getVisibleChannelItems_() {
+    const count = channelItems.length;
+    if (!count) return [];
+    return [-1, 0, 1].map(offset => {
+      const actualIndex = wrapIndex(channelIndex + offset, count);
+      return { ...channelItems[actualIndex], _actualIndex: actualIndex, _slot: offset };
+    });
+  }
+
+  function renderChannelCard_(item) {
+    const isCenter = item._slot === 0;
+    const borderStyle = getChannelBorderStyle_(item.id);
+    return `
+      <a class="cover-card channel-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-channel-index="${escapeHtml(item._actualIndex)}">
+        <div class="cover-thumb-wrap channel-thumb-wrap media-thumb-loading" style="${escapeHtml(borderStyle)}">
+          <img class="cover-thumb channel-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src='https://www.google.com/s2/favicons?domain=youtube.com&sz=128';}else{this.parentElement.classList.remove('media-thumb-loading');this.remove();}" />
+        </div>
+        <div class="cover-title" data-channel-title="${escapeHtml(item.id)}">${escapeHtml(item.title)}</div>
+      </a>
+    `;
+  }
+
+  async function enrichChannelItems_(items) {
+    const targets = items.filter(item => item && item.url && !item.enriched);
+    await Promise.all(targets.map(async item => {
+      try {
+        const endpoint = `https://noembed.com/embed?url=${encodeURIComponent(item.url)}`;
+        const res = await fetch(endpoint, { cache: "force-cache" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const target = channelItems[item._actualIndex];
+        if (!target) return;
+        const title = String(json.title || json.author_name || "").trim();
+        const thumbnail = String(json.thumbnail_url || "").trim();
+        if (title && !target.hasCustomTitle) target.title = title;
+        if (thumbnail && !target.hasCustomThumbnail) target.thumbnail = thumbnail;
+        target.enriched = true;
+        renderChannelSection();
+      } catch {
+        const target = channelItems[item._actualIndex];
+        if (target) target.enriched = true;
+      }
+    }));
+  }
+
+  function moveChannelCarousel(direction) {
+    if (!channelItems.length || channelMoving) return;
+    channelMoving = true;
+    if (els.channelTrack) {
+      els.channelTrack.classList.remove("move-left", "move-right");
+      void els.channelTrack.offsetWidth;
+      els.channelTrack.classList.add(direction > 0 ? "move-left" : "move-right");
+    }
+    window.setTimeout(() => {
+      channelIndex = wrapIndex(channelIndex + direction, channelItems.length);
+      if (els.channelTrack) els.channelTrack.classList.remove("move-left", "move-right");
+      channelMoving = false;
+      renderChannelSection();
+    }, 260);
+  }
+
+  function startChannelAutoTimer() {
+    if (channelAutoTimer) window.clearInterval(channelAutoTimer);
+    channelAutoTimer = window.setInterval(() => {
+      if (!shouldAutoMoveChannel_()) return;
+      moveChannelCarousel(-1);
+    }, 10000);
+  }
+
+  function shouldAutoMoveChannel_() {
+    if (!els.channelDetails || !els.channelDetails.open) return false;
+    if (!els.channelCarousel || els.channelCarousel.hidden) return false;
+    if (channelHover || channelMoving || channelItems.length <= 1) return false;
+    return isElementFullyVisible(els.channelDetails);
   }
 
   function bindCarouselPlaylistAddCards_(root, fallbackKind) {
@@ -4498,9 +4951,9 @@
   function makeExternalPlaylistEntryFromCard_(card, kind) {
     const url = String(card && card.href || "").trim();
     const title = String(card && card.querySelector(".cover-title") && card.querySelector(".cover-title").textContent || "").trim()
-      || (kind === "rec" ? "추천 팬 영상" : "커버곡");
+      || (kind === "rec" ? "추천 플레이리스트" : "커버곡");
     const section = kind === "rec"
-      ? "추천 팬 영상"
+      ? "추천 플레이리스트"
       : String(card && card.dataset && card.dataset.playlistSection || "커버곡").trim() || "커버곡";
     const videoId = extractYoutubeVideoId(url);
     const playlistId = extractYoutubePlaylistId(url);

@@ -175,19 +175,39 @@
     <details id="recDetails" class="panel-details rec-details">
       <summary class="panel-summary">
         <div>
-          <h2>추천 팬 영상</h2>
-          <p id="recDescription">추천 팬 영상을 표시합니다.</p>
+          <h2>추천 플레이리스트</h2>
+          <p id="recDescription">추천 플레이리스트를 표시합니다.</p>
         </div>
       </summary>
 
       <section class="panel-body cover-panel rec-panel">
-        <div id="recEmpty" class="empty" hidden>표시할 추천 팬 영상이 없습니다.</div>
+        <div id="recEmpty" class="empty" hidden>표시할 추천 플레이리스트가 없습니다.</div>
         <div id="recCarousel" class="cover-carousel rec-carousel" hidden>
-          <button id="recPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 팬 영상">‹</button>
+          <button id="recPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 플레이리스트">‹</button>
           <div class="cover-window">
             <div id="recTrack" class="cover-track"></div>
           </div>
-          <button id="recNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 팬 영상">›</button>
+          <button id="recNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 플레이리스트">›</button>
+        </div>
+      </section>
+    </details>
+
+    <details id="channelDetails" class="panel-details channel-details">
+      <summary class="panel-summary">
+        <div>
+          <h2>추천 채널</h2>
+          <p id="channelDescription">추천 채널을 표시합니다.</p>
+        </div>
+      </summary>
+
+      <section class="panel-body cover-panel channel-panel">
+        <div id="channelEmpty" class="empty" hidden>표시할 추천 채널이 없습니다.</div>
+        <div id="channelCarousel" class="cover-carousel channel-carousel" hidden>
+          <button id="channelPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 채널">‹</button>
+          <div class="cover-window">
+            <div id="channelTrack" class="cover-track channel-track"></div>
+          </div>
+          <button id="channelNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 채널">›</button>
         </div>
       </section>
     </details>
