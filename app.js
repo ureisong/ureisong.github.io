@@ -3245,10 +3245,40 @@
             }
           }
         },
-        onStateChange: event => handleYoutubePlayerStateChange_(event, token),
-        onError: event => handleYoutubePlayerError_(event, token)
+        onStateChange: event => handleYoutubePlayerStateChange_(event, youtubePlayerToken),
+        onError: event => handleYoutubePlayerError_(event, youtubePlayerToken)
       }
     });
+  }
+
+  function loadYoutubeMediaIntoExistingPlayer_(videoId, startSeconds, token, options = {}) {
+    if (!youtubePlayer || !isCurrentYoutubeToken_(token)) return false;
+
+    const safeStart = Math.max(0, Number(startSeconds) || 0);
+    try {
+      if (options && options.playlistId && !videoId && typeof youtubePlayer.loadPlaylist === "function") {
+        youtubePlayer.loadPlaylist({
+          list: options.playlistId,
+          listType: "playlist",
+          index: 0,
+          startSeconds: safeStart
+        });
+        return true;
+      }
+
+      if (videoId && typeof youtubePlayer.loadVideoById === "function") {
+        youtubePlayer.loadVideoById({
+          videoId,
+          startSeconds: safeStart,
+          suggestedQuality: "hd1080"
+        });
+        return true;
+      }
+    } catch (err) {
+      console.warn("기존 YouTube 플레이어 영상 교체 실패", err);
+    }
+
+    return false;
   }
 
   function activateYoutubeLoadingAfterUserOrAutoplay_(token) {
@@ -3300,11 +3330,13 @@
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 0);
         if (playlistPlayback && playlistPlayback.active) {
+          if (!youtubeStartedPlaying && playlistPlayback.volumeMode === "starting") break;
           handlePlaylistPlaybackPaused_();
           setupMediaSessionPlaybackControls_();
         }
         break;
       case YT.PlayerState.ENDED:
+        if (playlistPlayback && playlistPlayback.active && !youtubeStartedPlaying) break;
         setMediaSessionPlaybackState_("none");
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
@@ -6068,7 +6100,6 @@
     youtubeAwaitingManualPlayback = false;
     clearYoutubeShareAutoplayWaitTimer_();
 
-    destroyYoutubePlayer_(false);
     currentModalSongId = playable.type === "song" && playable.song ? playable.song.id : "";
     setModalTitleText_(playable.title || "");
     setModalArtistText_(playable.artist || "");
@@ -6085,7 +6116,9 @@
     setupMediaSessionPlaybackControls_();
     scheduleMediaSessionRefresh_();
 
-    renderYoutubeFrameMount_();
+    const hasReusablePlayer = Boolean(youtubePlayer && typeof youtubePlayer.loadVideoById === "function");
+    if (!hasReusablePlayer) renderYoutubeFrameMount_();
+    else if (els.youtubeFrameWrap) els.youtubeFrameWrap.classList.add("playlist-side-nav-enabled");
     els.youtubeModal.hidden = false;
     document.body.classList.add("modal-open");
 
@@ -6099,6 +6132,18 @@
     ensureYouTubeIframeApi_()
       .then(() => {
         if (!isCurrentYoutubeToken_(token)) return;
+
+        if (hasReusablePlayer) {
+          preparePlaylistPlayerForFadeStart_(youtubePlayer);
+          const loaded = loadYoutubeMediaIntoExistingPlayer_(playable.videoId, playable.start, token, { playlistId: playable.playlistId });
+          if (!loaded) {
+            destroyYoutubePlayer_(false);
+            renderYoutubeFrameMount_();
+            createYoutubePlayer_(playable.videoId, playable.start, token, playlistPlayback.currentEnd, { playlistId: playable.playlistId });
+          }
+          return;
+        }
+
         createYoutubePlayer_(playable.videoId, playable.start, token, playlistPlayback.currentEnd, { playlistId: playable.playlistId });
       })
       .catch(err => {
