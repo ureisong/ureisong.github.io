@@ -27,6 +27,11 @@
   const YOUTUBE_NO_RESPONSE_CLOSE_MS = 10000;
   const YOUTUBE_NO_RESPONSE_NOTICE_MS = 3000;
   const YOUTUBE_SHARE_AUTOPLAY_WAIT_MS = 2600;
+  const TAB_TITLE_MARQUEE_INITIAL_HOLD_MS = 3000;
+  const TAB_TITLE_MARQUEE_STEP_MS = 250;
+  const TAB_TITLE_MARQUEE_END_HOLD_MS = 2200;
+  const TAB_TITLE_MARQUEE_REPEAT = true;
+  const TAB_TITLE_MARQUEE_GAP = "　　　　　　　　　　　　";
 
   const RECOMMEND_LIMITS = {
     random: 5,
@@ -58,7 +63,7 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    /* "20251104_1_016", "20251021_1_013", */
+    /*"20251104_1_016", "20251021_1_013",*/
     {
       type: "external",
       key: "external:d68gIXrr_yY",
@@ -193,6 +198,14 @@
   
   const DEFAULT_DOCUMENT_TITLE = document.title || "들어줄레이🍇👻";
   const DEFAULT_H1_TEXT = els.pageTitle ? els.pageTitle.textContent : DEFAULT_DOCUMENT_TITLE;
+  let normalDocumentTitle = DEFAULT_DOCUMENT_TITLE;
+  let currentModalTitleText = "";
+  let currentModalArtistText = "";
+  let youtubeIsPlaying = false;
+  let tabTitleMarqueeTimer = null;
+  let tabTitleMarqueeActive = false;
+  let tabTitleMarqueeText = "";
+  let tabTitleMarqueeOffset = 0;
 
   let allSongs = [];
   let filteredSongs = [];
@@ -2814,7 +2827,9 @@
   }
 
   function setModalTitleText_(text) {
-    setModalScrollingText_(els.modalSongTitle, text);
+    currentModalTitleText = String(text || "").trim();
+    setModalScrollingText_(els.modalSongTitle, currentModalTitleText);
+    refreshPlayingTabTitle_();
     if (!els.modalSongTitle) return;
     const song = currentModalSongId ? allSongs.find(item => item.id === currentModalSongId) : null;
     const tooltip = getSongTitleTooltip_(song);
@@ -2822,7 +2837,81 @@
   }
 
   function setModalArtistText_(text) {
-    setModalScrollingText_(els.modalSongArtist, text, { artistParts: true });
+    currentModalArtistText = String(text || "").trim();
+    setModalScrollingText_(els.modalSongArtist, currentModalArtistText, { artistParts: true });
+    refreshPlayingTabTitle_();
+  }
+
+  function isDesktopTabTitleEnvironment_() {
+    return Boolean(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+  }
+
+  function makePlayingTabTitle_() {
+    return [currentModalTitleText, currentModalArtistText].filter(Boolean).join(" - ");
+  }
+
+  function refreshPlayingTabTitle_() {
+    if (!youtubeIsPlaying || !isDesktopTabTitleEnvironment_()) return;
+    const nextTitle = makePlayingTabTitle_();
+    if (!nextTitle || (tabTitleMarqueeActive && tabTitleMarqueeText === nextTitle)) return;
+    startTabTitleMarquee_(nextTitle);
+  }
+
+  function startTabTitleMarquee_(text) {
+    stopTabTitleMarquee_(false);
+    const value = String(text || "").trim();
+    if (!value || !isDesktopTabTitleEnvironment_()) {
+      restoreNormalDocumentTitle_();
+      return;
+    }
+
+    tabTitleMarqueeActive = true;
+    tabTitleMarqueeText = value;
+    tabTitleMarqueeOffset = 0;
+    document.title = value;
+    tabTitleMarqueeTimer = window.setTimeout(runTabTitleMarqueeStep_, TAB_TITLE_MARQUEE_INITIAL_HOLD_MS);
+  }
+
+  function runTabTitleMarqueeStep_() {
+    if (!tabTitleMarqueeActive || !youtubeIsPlaying || !isDesktopTabTitleEnvironment_()) {
+      stopTabTitleMarquee_(true);
+      return;
+    }
+
+    const source = `${tabTitleMarqueeText}${TAB_TITLE_MARQUEE_GAP}`;
+    if (!source.length) {
+      stopTabTitleMarquee_(true);
+      return;
+    }
+
+    tabTitleMarqueeOffset = (tabTitleMarqueeOffset + 1) % source.length;
+    document.title = source.slice(tabTitleMarqueeOffset) + source.slice(0, tabTitleMarqueeOffset);
+
+    if (tabTitleMarqueeOffset === 0) {
+      if (!TAB_TITLE_MARQUEE_REPEAT) {
+        stopTabTitleMarquee_(true);
+        return;
+      }
+      tabTitleMarqueeTimer = window.setTimeout(runTabTitleMarqueeStep_, TAB_TITLE_MARQUEE_END_HOLD_MS);
+      return;
+    }
+
+    tabTitleMarqueeTimer = window.setTimeout(runTabTitleMarqueeStep_, TAB_TITLE_MARQUEE_STEP_MS);
+  }
+
+  function stopTabTitleMarquee_(restoreTitle = true) {
+    if (tabTitleMarqueeTimer) {
+      clearTimeout(tabTitleMarqueeTimer);
+      tabTitleMarqueeTimer = null;
+    }
+    tabTitleMarqueeActive = false;
+    tabTitleMarqueeText = "";
+    tabTitleMarqueeOffset = 0;
+    if (restoreTitle) restoreNormalDocumentTitle_();
+  }
+
+  function restoreNormalDocumentTitle_() {
+    document.title = normalDocumentTitle || DEFAULT_DOCUMENT_TITLE;
   }
 
   function setModalFooterText(text) {
@@ -3074,6 +3163,8 @@
 
     const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
     const token = ++youtubePlayerToken;
+    youtubeIsPlaying = false;
+    stopTabTitleMarquee_(true);
     youtubeStartedPlaying = false;
     youtubeInitialLoadingSuppressed = modalOptions.suppressInitialLoading === true;
     youtubeAwaitingManualPlayback = false;
@@ -3118,6 +3209,8 @@
   }
 
   function closeYoutubeModal() {
+    youtubeIsPlaying = false;
+    stopTabTitleMarquee_(true);
     closeBurninShield_();
     disarmPlaylistFinishedClose_();
     youtubePlayerToken += 1;
@@ -3296,6 +3389,8 @@
 
     switch (event.data) {
       case YT.PlayerState.PLAYING:
+        youtubeIsPlaying = true;
+        refreshPlayingTabTitle_();
         setMediaSessionPlaybackState_("playing");
         clearYoutubeShareAutoplayWaitTimer_();
         youtubeInitialLoadingSuppressed = false;
@@ -3325,6 +3420,8 @@
         clearYoutubeBufferingTimer_();
         break;
       case YT.PlayerState.PAUSED:
+        youtubeIsPlaying = false;
+        stopTabTitleMarquee_(true);
         setMediaSessionPlaybackState_("paused");
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
@@ -3337,6 +3434,8 @@
         break;
       case YT.PlayerState.ENDED:
         if (playlistPlayback && playlistPlayback.active && !youtubeStartedPlaying) break;
+        youtubeIsPlaying = false;
+        stopTabTitleMarquee_(true);
         setMediaSessionPlaybackState_("none");
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
@@ -3790,7 +3889,8 @@
     const titleText = String(titleValue || "").trim();
     const h1Text = String(h1Value || "").trim();
 
-    document.title = titleText || DEFAULT_DOCUMENT_TITLE;
+    normalDocumentTitle = titleText || DEFAULT_DOCUMENT_TITLE;
+    if (!tabTitleMarqueeActive) document.title = normalDocumentTitle;
 
     if (els.pageTitle) {
       els.pageTitle.textContent = h1Text || DEFAULT_H1_TEXT;
@@ -6095,6 +6195,8 @@
     playlistPlayback.resumeVolume = 0;
 
     const token = ++youtubePlayerToken;
+    youtubeIsPlaying = false;
+    stopTabTitleMarquee_(true);
     youtubeStartedPlaying = false;
     youtubeInitialLoadingSuppressed = false;
     youtubeAwaitingManualPlayback = false;
@@ -6182,6 +6284,8 @@
 
   function finishPlaylistPlayback_() {
     if (!playlistPlayback || !playlistPlayback.active) return;
+    youtubeIsPlaying = false;
+    stopTabTitleMarquee_(true);
     playlistPlayback.finished = true;
     clearPlaylistSegmentWatcher_();
     clearPlaylistSkipTimer_();
