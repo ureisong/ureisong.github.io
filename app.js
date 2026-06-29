@@ -52,6 +52,9 @@
   const PLAYLIST_END_CHECK_INTERVAL_MS = 250;
   const PLAYLIST_ERROR_SKIP_MS = 1600;
   const PLAYLIST_FADE_DURATION_MS = 2000;
+  const PLAYLIST_DEFAULT_VOLUME = 100;
+  const PLAYLIST_VOLUME_MONITOR_INTERVAL_MS = 300;
+  const PLAYLIST_VOLUME_USER_CHANGE_THRESHOLD = 2;
   const PLAYLIST_END_FADE_TRIGGER_SECONDS = 1.5;
   const DEFAULT_PLAYLIST_NAME = "기본";
   const DEFAULT_PLAYLIST_SEED_ITEMS = [
@@ -63,7 +66,7 @@
       title: "IRIS OUT / 米津玄師 - Urei Cover",
       section: "커버곡"
     },
-    /*"20251104_1_016", "20251021_1_013",*/
+    "20251104_1_016", "20251021_1_013",
     {
       type: "external",
       key: "external:d68gIXrr_yY",
@@ -169,6 +172,7 @@
     filterDetails: document.getElementById("filterDetails"),
     filterSummaryHelp: document.querySelector("#filterDetails .summary-help"),
     faviconLink: document.getElementById("faviconLink"),
+    modalSongInfoTop: document.querySelector(".modal-song-info-top"),
     modalSongTitle: document.getElementById("modalSongTitle"),
     modalSongArtist: document.getElementById("modalSongArtist"),
     modalSongFooter: document.getElementById("modalSongFooter"),
@@ -264,6 +268,9 @@
   let playlistSkipTimer = null;
   let playlistVolumeFadeTimer = null;
   let playlistVolumeFadeSeq = 0;
+  let playlistVolumeMonitorTimer = null;
+  let playlistLastAutomatedVolume = null;
+  let playlistLastAutomatedVolumeAt = 0;
   let mediaSessionRefreshTimer = null;
   let mediaSessionRefreshSeq = 0;
   let playlistModalMode = "manager";
@@ -3129,6 +3136,8 @@
       <div id="youtubePlayerMount" class="youtube-player-mount"></div>
       <button class="youtube-side-nav youtube-side-prev" type="button" aria-label="이전곡"></button>
       <button class="youtube-side-nav youtube-side-next" type="button" aria-label="다음곡"></button>
+      <div class="youtube-side-time youtube-side-time-current" aria-hidden="true">00:00</div>
+      <div class="youtube-side-time youtube-side-time-remaining" aria-hidden="true">-00:00</div>
     `;
     const prev = els.youtubeFrameWrap.querySelector(".youtube-side-prev");
     const next = els.youtubeFrameWrap.querySelector(".youtube-side-next");
@@ -3147,11 +3156,13 @@
   function openYoutubeModal(url, meta = {}, options = {}) {
     const modalOptions = options || {};
     if (modalOptions.forceNormalModal === true || !modalOptions.keepPlaylistPlayback) {
+      resetPlaylistSegmentProgress_();
       disarmPlaylistFinishedClose_();
       playlistPlayback = null;
       clearPlaylistSegmentWatcher_();
       clearPlaylistSkipTimer_();
       clearPlaylistVolumeFade_();
+      clearPlaylistVolumeMonitor_();
       renderPlaylistPlaybackUi_();
     }
     const videoId = extractYoutubeVideoId(url);
@@ -3212,6 +3223,7 @@
     youtubeIsPlaying = false;
     stopTabTitleMarquee_(true);
     closeBurninShield_();
+    resetPlaylistSegmentProgress_();
     disarmPlaylistFinishedClose_();
     youtubePlayerToken += 1;
     els.youtubeModal.hidden = true;
@@ -3227,6 +3239,7 @@
     if (els.youtubeFrameWrap) els.youtubeFrameWrap.classList.remove("playlist-side-nav-enabled");
     clearPlaylistSegmentWatcher_();
     clearPlaylistVolumeFade_();
+    clearPlaylistVolumeMonitor_();
     playlistPlayback = null;
     renderPlaylistPlaybackUi_();
     if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
@@ -3319,13 +3332,7 @@
           if (!isCurrentYoutubeToken_(token)) return;
           try {
             if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
-              try {
-                const currentVolume = Number(event.target.getVolume && event.target.getVolume());
-                if (!playlistPlayback.hasVolumeBaseline && Number.isFinite(currentVolume) && currentVolume > 0) {
-                  playlistPlayback.baseVolume = Math.max(1, Math.min(100, currentVolume));
-                  playlistPlayback.hasVolumeBaseline = true;
-                }
-              } catch {}
+              playlistPlayback.baseVolume = getPlaylistPreferredVolume_();
               playlistPlayback.volumeMode = "starting";
               playlistPlayback.resumeVolume = 0;
               preparePlaylistPlayerForFadeStart_(event.target);
@@ -6065,9 +6072,11 @@
       repeat,
       queue: buildPlaylistQueue_(playbackList, mode),
       index: 0,
+      currentStart: 0,
       currentEnd: 0,
-      baseVolume: 100,
-      hasVolumeBaseline: false,
+      baseVolume: PLAYLIST_DEFAULT_VOLUME,
+      preferredVolume: PLAYLIST_DEFAULT_VOLUME,
+      hasVolumeBaseline: true,
       resumeVolume: 0,
       volumeMode: "starting",
       fadingOut: false,
@@ -6075,6 +6084,7 @@
     };
 
     closePlaylistModal();
+    startPlaylistVolumeMonitor_();
     playPlaylistItemAt_(0, { captureCurrentVolume: false });
   }
 
@@ -6190,7 +6200,10 @@
 
     playlistPlayback.index = index;
     playlistPlayback.finished = false;
+    playlistPlayback.currentStart = playable.hasSegment ? playable.start : 0;
     playlistPlayback.currentEnd = playable.hasSegment ? playable.end : 0;
+    resetPlaylistSegmentProgress_();
+    applyRandomPlaylistProgressColors_();
     playlistPlayback.volumeMode = "starting";
     playlistPlayback.resumeVolume = 0;
 
@@ -6287,9 +6300,11 @@
     youtubeIsPlaying = false;
     stopTabTitleMarquee_(true);
     playlistPlayback.finished = true;
+    resetPlaylistSegmentProgress_();
     clearPlaylistSegmentWatcher_();
     clearPlaylistSkipTimer_();
     clearPlaylistVolumeFade_();
+    clearPlaylistVolumeMonitor_();
     try {
       if (youtubePlayer && typeof youtubePlayer.mute === "function") youtubePlayer.mute();
       if (youtubePlayer && typeof youtubePlayer.stopVideo === "function") youtubePlayer.stopVideo();
@@ -6338,27 +6353,65 @@
 
   function rememberPlaylistPlaybackVolume_() {
     if (!playlistPlayback || !playlistPlayback.active) return;
-    const currentVolume = getPlaylistCurrentVolume_(playlistPlayback.baseVolume);
-    if (Number.isFinite(currentVolume) && currentVolume > 1) {
-      playlistPlayback.baseVolume = Math.max(1, Math.min(100, currentVolume));
-      playlistPlayback.hasVolumeBaseline = true;
-      playlistPlayback.resumeVolume = 0;
-    }
+    capturePlaylistUserVolume_();
     setPlaylistVolumeImmediately_(0);
+  }
+
+  function getPlaylistPreferredVolume_() {
+    const preferred = Number(playlistPlayback && playlistPlayback.preferredVolume);
+    if (Number.isFinite(preferred)) return Math.max(1, Math.min(100, preferred));
+    return PLAYLIST_DEFAULT_VOLUME;
+  }
+
+  function setPlaylistAutomatedVolume_(player, volume) {
+    if (!player || typeof player.setVolume !== "function") return;
+    const safeVolume = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)));
+    playlistLastAutomatedVolume = safeVolume;
+    playlistLastAutomatedVolumeAt = performance.now();
+    try { player.setVolume(safeVolume); } catch {}
+  }
+
+  function capturePlaylistUserVolume_() {
+    if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer) return;
+    if (playlistPlayback.volumeMode !== "normal") return;
+    const currentVolume = getPlaylistCurrentVolume_(getPlaylistPreferredVolume_());
+    if (!Number.isFinite(currentVolume) || currentVolume <= 0) return;
+    const recentlyAutomated = performance.now() - playlistLastAutomatedVolumeAt < PLAYLIST_VOLUME_MONITOR_INTERVAL_MS * 2;
+    if (recentlyAutomated && playlistLastAutomatedVolume !== null && Math.abs(currentVolume - playlistLastAutomatedVolume) < PLAYLIST_VOLUME_USER_CHANGE_THRESHOLD) return;
+    if (Math.abs(currentVolume - getPlaylistPreferredVolume_()) < PLAYLIST_VOLUME_USER_CHANGE_THRESHOLD) return;
+    playlistPlayback.preferredVolume = Math.max(1, Math.min(100, currentVolume));
+    playlistPlayback.baseVolume = playlistPlayback.preferredVolume;
+    playlistPlayback.hasVolumeBaseline = true;
+  }
+
+  function startPlaylistVolumeMonitor_() {
+    clearPlaylistVolumeMonitor_();
+    playlistVolumeMonitorTimer = window.setInterval(() => {
+      capturePlaylistUserVolume_();
+    }, PLAYLIST_VOLUME_MONITOR_INTERVAL_MS);
+  }
+
+  function clearPlaylistVolumeMonitor_() {
+    if (playlistVolumeMonitorTimer) {
+      window.clearInterval(playlistVolumeMonitorTimer);
+      playlistVolumeMonitorTimer = null;
+    }
+    playlistLastAutomatedVolume = null;
+    playlistLastAutomatedVolumeAt = 0;
   }
 
   function preparePlaylistPlayerForFadeStart_(player) {
     if (!player) return;
     try { if (typeof player.mute === "function") player.mute(); } catch {}
-    try { if (typeof player.setVolume === "function") player.setVolume(0); } catch {}
+    setPlaylistAutomatedVolume_(player, 0);
   }
 
   function releasePlaylistPlayerForFade_(player, volume) {
     if (!player) return;
     const safeVolume = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)));
-    try { if (typeof player.setVolume === "function") player.setVolume(safeVolume); } catch {}
+    setPlaylistAutomatedVolume_(player, safeVolume);
     try { if (typeof player.unMute === "function") player.unMute(); } catch {}
-    try { if (typeof player.setVolume === "function") player.setVolume(safeVolume); } catch {}
+    setPlaylistAutomatedVolume_(player, safeVolume);
   }
 
   function getPlaylistCurrentVolume_(fallback = 0) {
@@ -6371,13 +6424,13 @@
 
   function setPlaylistVolumeImmediately_(volume) {
     if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
-    try { youtubePlayer.setVolume(Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))); } catch {}
+    setPlaylistAutomatedVolume_(youtubePlayer, volume);
   }
 
   function getPlaylistFadeTargetVolume_() {
     const resumeVolume = Number(playlistPlayback && playlistPlayback.resumeVolume);
     if (Number.isFinite(resumeVolume) && resumeVolume > 0) return Math.max(0, Math.min(100, resumeVolume));
-    return Math.max(0, Math.min(100, Number(playlistPlayback && playlistPlayback.baseVolume) || 100));
+    return getPlaylistPreferredVolume_();
   }
 
   function handlePlaylistPlaybackPlaying_() {
@@ -6399,28 +6452,102 @@
 
   function handlePlaylistPlaybackPaused_() {
     if (!playlistPlayback || !playlistPlayback.active || playlistPlayback.finished) return;
+    const wasNormalVolume = playlistPlayback.volumeMode === "normal";
+    const currentVolume = wasNormalVolume
+      ? getPlaylistCurrentVolume_(getPlaylistPreferredVolume_())
+      : getPlaylistPreferredVolume_();
     clearPlaylistVolumeFade_();
-    const currentVolume = getPlaylistCurrentVolume_(playlistPlayback.baseVolume);
-    if (currentVolume > 0) playlistPlayback.resumeVolume = currentVolume;
-    else if (!Number(playlistPlayback.resumeVolume)) playlistPlayback.resumeVolume = Number(playlistPlayback.baseVolume) || 100;
+    playlistPlayback.resumeVolume = currentVolume > 0 ? currentVolume : getPlaylistPreferredVolume_();
     playlistPlayback.volumeMode = "paused";
     setPlaylistVolumeImmediately_(0);
   }
 
+  function formatPlaylistProgressTime_(seconds, negative = false) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const value = hours > 0
+      ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
+      : `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    return negative ? `-${value}` : value;
+  }
+
+  function applyRandomPlaylistProgressColors_() {
+    if (!els.modalSongInfoTop) return;
+    const hue = Math.floor(Math.random() * 360);
+    const secondHue = (hue + 28 + Math.floor(Math.random() * 54)) % 360;
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-color-start", `hsla(${hue}, 78%, 58%, 0.24)`);
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-color-end", `hsla(${secondHue}, 74%, 63%, 0.20)`);
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-color-start-dark", `hsla(${hue}, 82%, 64%, 0.30)`);
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-color-end-dark", `hsla(${secondHue}, 78%, 68%, 0.25)`);
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-shadow", `hsla(${hue}, 80%, 55%, 0.13)`);
+    els.modalSongInfoTop.style.setProperty("--playlist-segment-progress-shadow-dark", `hsla(${hue}, 84%, 64%, 0.17)`);
+  }
+
+  function resetPlaylistSegmentProgress_() {
+    if (els.modalSongInfoTop) {
+      els.modalSongInfoTop.classList.remove("playlist-segment-progress-active");
+      els.modalSongInfoTop.style.removeProperty("--playlist-segment-progress");
+    }
+    if (!els.youtubeFrameWrap) return;
+    els.youtubeFrameWrap.classList.remove("playlist-segment-progress-enabled");
+    const currentEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
+    const remainingEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
+    if (currentEl) currentEl.textContent = "00:00";
+    if (remainingEl) remainingEl.textContent = "-00:00";
+  }
+
+  function updatePlaylistSegmentProgress_(currentTime) {
+    if (!isDesktopTabTitleEnvironment_() || !playlistPlayback || !playlistPlayback.active) {
+      resetPlaylistSegmentProgress_();
+      return;
+    }
+
+    const start = Number(playlistPlayback.currentStart);
+    const end = Number(playlistPlayback.currentEnd);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      resetPlaylistSegmentProgress_();
+      return;
+    }
+
+    const duration = end - start;
+    const elapsed = Math.max(0, Math.min(duration, Number(currentTime) - start));
+    const remaining = Math.max(0, duration - elapsed);
+    const progress = duration > 0 ? Math.max(0, Math.min(100, elapsed / duration * 100)) : 0;
+
+    if (els.modalSongInfoTop) {
+      els.modalSongInfoTop.classList.add("playlist-segment-progress-active");
+      els.modalSongInfoTop.style.setProperty("--playlist-segment-progress", `${progress.toFixed(3)}%`);
+    }
+
+    if (!els.youtubeFrameWrap) return;
+    els.youtubeFrameWrap.classList.add("playlist-segment-progress-enabled");
+    const currentEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
+    const remainingEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
+    if (currentEl) currentEl.textContent = formatPlaylistProgressTime_(elapsed);
+    if (remainingEl) remainingEl.textContent = formatPlaylistProgressTime_(remaining, true);
+  }
+
   function startPlaylistSegmentWatcher_() {
     clearPlaylistSegmentWatcher_();
-    if (!playlistPlayback || !playlistPlayback.active || !playlistPlayback.currentEnd || !youtubePlayer) return;
+    if (!playlistPlayback || !playlistPlayback.active || !playlistPlayback.currentEnd || !youtubePlayer) {
+      resetPlaylistSegmentProgress_();
+      return;
+    }
 
     playlistSegmentTimer = window.setInterval(() => {
       if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.getCurrentTime !== "function") return;
       let current = 0;
       try { current = Number(youtubePlayer.getCurrentTime() || 0); } catch { return; }
+      updatePlaylistSegmentProgress_(current);
       const remaining = playlistPlayback.currentEnd - current;
 
       if (remaining > PLAYLIST_END_FADE_TRIGGER_SECONDS && playlistPlayback.fadingOut) {
         playlistPlayback.fadingOut = false;
         if (playlistPlayback.volumeMode === "ending") playlistPlayback.volumeMode = "normal";
         clearPlaylistVolumeFade_();
+        setPlaylistVolumeImmediately_(getPlaylistPreferredVolume_());
       }
 
       if (remaining <= PLAYLIST_END_FADE_TRIGGER_SECONDS && remaining > 0.08 && !playlistPlayback.fadingOut) {
@@ -6441,13 +6568,13 @@
 
   function startPlaylistVolumeFadeIn_(targetVolume, onDone) {
     if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
-    const target = Math.max(0, Math.min(100, Number(targetVolume) || Number(playlistPlayback.baseVolume) || 100));
+    const target = Math.max(0, Math.min(100, Number(targetVolume) || getPlaylistPreferredVolume_()));
     runPlaylistVolumeFade_(0, target, PLAYLIST_FADE_DURATION_MS, t => 1 - Math.pow(1 - t, 3), onDone, { muteUntilAudible: true });
   }
 
   function startPlaylistVolumeFadeOut_(durationMs = PLAYLIST_FADE_DURATION_MS) {
     if (!playlistPlayback || !playlistPlayback.active || !youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
-    let from = Math.max(0, Math.min(100, Number(playlistPlayback.baseVolume) || 100));
+    let from = getPlaylistCurrentVolume_(getPlaylistPreferredVolume_());
     try {
       const currentVolume = Number(youtubePlayer.getVolume && youtubePlayer.getVolume());
       if (Number.isFinite(currentVolume)) from = currentVolume;
@@ -6482,7 +6609,7 @@
           releasePlaylistPlayerForFade_(fadePlayer, safeValue);
           audioReleased = true;
         } else {
-          fadePlayer.setVolume(safeValue);
+          setPlaylistAutomatedVolume_(fadePlayer, safeValue);
         }
       } catch { return; }
 

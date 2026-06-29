@@ -2468,3 +2468,78 @@ html.playlist-disabled [data-playlist-feature] {
   background: var(--card);
   border: 2px solid var(--card);
 }
+
+@media (hover: hover) and (pointer: fine) {
+  .modal-song-info-top.playlist-segment-progress-active {
+    --playlist-segment-progress: 0%;
+    --playlist-segment-progress-color-start: rgba(96, 165, 250, 0.24);
+    --playlist-segment-progress-color-end: rgba(244, 114, 182, 0.20);
+    --playlist-segment-progress-color-start-dark: rgba(56, 189, 248, 0.30);
+    --playlist-segment-progress-color-end-dark: rgba(251, 113, 133, 0.25);
+    --playlist-segment-progress-shadow: rgba(96, 165, 250, 0.13);
+    --playlist-segment-progress-shadow-dark: rgba(56, 189, 248, 0.17);
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+
+  html.dark-mode .modal-song-info-top.playlist-segment-progress-active {
+    --playlist-segment-progress-color-start: var(--playlist-segment-progress-color-start-dark);
+    --playlist-segment-progress-color-end: var(--playlist-segment-progress-color-end-dark);
+  }
+
+  .modal-song-info-top.playlist-segment-progress-active::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 0;
+    width: var(--playlist-segment-progress);
+    background:
+      linear-gradient(100deg,
+        var(--playlist-segment-progress-color-start) 0%,
+        var(--playlist-segment-progress-color-end) 72%,
+        rgba(255, 255, 255, 0.18) 100%);
+    box-shadow: 10px 0 22px var(--playlist-segment-progress-shadow);
+    transition: width 0.28s linear;
+    pointer-events: none;
+  }
+
+  html.dark-mode .modal-song-info-top.playlist-segment-progress-active::before {
+    box-shadow: 10px 0 24px var(--playlist-segment-progress-shadow-dark);
+  }
+
+  .modal-song-info-top.playlist-segment-progress-active > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .youtube-side-time {
+    position: absolute;
+    top: calc(50% + 29px);
+    z-index: 5;
+    min-width: 58px;
+    padding: 4px 7px 5px;
+    border: 1px solid rgba(255, 255, 255, 0.44);
+    border-radius: 999px;
+    background: rgba(8, 12, 22, 0.76);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    text-align: center;
+    letter-spacing: 0.02em;
+    opacity: 0;
+    transform: translateY(5px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+    backdrop-filter: blur(6px);
+  }
+
+  .youtube-side-time-current { left: calc(5% - 29px); }
+  .youtube-side-time-remaining { right: calc(5% - 29px); }
+
+  .youtube-frame-wrap.playlist-segment-progress-enabled:hover .youtube-side-time {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
