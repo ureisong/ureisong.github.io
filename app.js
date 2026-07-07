@@ -2380,10 +2380,16 @@
         })
       });
 
+      const responseText = await res.text();
       let json = null;
       try {
-        json = await res.json();
+        json = JSON.parse(responseText);
       } catch (parseErr) {
+        const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+        const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/i.test(responseText);
+        if (looksLikeHtml) {
+          throw new Error("Apps Script가 JSON 대신 HTML을 반환했습니다. 배포 URL·웹 앱 접근 권한·배포 버전을 확인하세요.");
+        }
         throw new Error(`POST 응답 JSON 파싱 실패: ${parseErr.message || parseErr}`);
       }
 
@@ -4496,28 +4502,43 @@
     });
   }
 
+  function getResolvedCoverFallbackTitle_(cover) {
+    const section = String(cover && cover.section || "커버곡").trim() || "커버곡";
+    return section === "오리지널 곡" ? "YouTube 오리지널 곡" : "YouTube 커버곡";
+  }
+
+  function updateResolvedCoverItem_(id, resolved) {
+    const key = String(id || "").trim();
+    if (!key || !resolved) return;
+    const current = coverItems.find(item => item.id === key);
+    if (current) Object.assign(current, resolved);
+    persistCoverItemsToLocalCache_();
+    hydrateStoredCoverPlaylistEntries_();
+  }
+
   async function resolveRecommendedPlaylistItem_(id) {
     const key = String(id || "").trim();
     if (!key) return null;
     if (findSongById(key)) return key;
+
     let cover = getStoredCoverItemById_(key);
-    if (!cover) return null;
-    if (!cover.title || cover.title === "커버곡을 불러오는 중...") {
-      const title = await fetchYoutubeOembedTitle(cover.url);
-      if (title) {
-        const current = coverItems.find(item => item.id === key);
-        if (current) current.title = title;
-        cover = { ...cover, title };
-        persistCoverItemsToLocalCache_();
-      }
+    if (!cover || !cover.url) return null;
+
+    const pendingTitle = !cover.title || cover.title === "커버곡을 불러오는 중...";
+    if (pendingTitle) {
+      const fetchedTitle = await fetchYoutubeOembedTitle(cover.url);
+      const resolvedTitle = fetchedTitle || getResolvedCoverFallbackTitle_(cover);
+      cover = { ...cover, title: resolvedTitle };
+      updateResolvedCoverItem_(key, cover);
     }
+
     return {
       type: "external",
       key: `external:${cover.id}`,
       url: cover.url,
       videoId: cover.videoId || extractYoutubeVideoId(cover.url),
       playlistId: "",
-      title: cover.title || "커버곡",
+      title: cover.title || getResolvedCoverFallbackTitle_(cover),
       section: cover.section || "커버곡"
     };
   }
@@ -4531,7 +4552,7 @@
       return;
     }
     const resolved = (await Promise.all((item.ids || []).map(resolveRecommendedPlaylistItem_))).filter(Boolean);
-    const additions = resolved.filter(entry => !playlistHasItem_(selected, entry));
+    const additions = filterUniquePlaylistItems_(resolved).filter(entry => !playlistHasItem_(selected, entry));
     if (!additions.length) {
       showCooldownText("추가 가능한 곡이 없습니다.");
       return;
@@ -5078,13 +5099,42 @@
     };
   }
 
+  function getPlaylistItemMediaIdentity_(item) {
+    if (typeof item === "string") {
+      const song = findSongById(item);
+      const videoId = song ? extractYoutubeVideoId(song.link) : "";
+      return videoId ? `video:${videoId}` : `song:${item}`;
+    }
+    if (!item || typeof item !== "object") return "";
+    const url = String(item.url || "").trim();
+    const videoId = String(item.videoId || extractYoutubeVideoId(url) || "").trim();
+    const playlistId = String(item.playlistId || extractYoutubePlaylistId(url) || "").trim();
+    if (videoId) return `video:${videoId}`;
+    if (playlistId) return `playlist:${playlistId}`;
+    return String(item.key || item.id || url || "").trim();
+  }
+
+  function filterUniquePlaylistItems_(items) {
+    const seen = new Set();
+    return (items || []).filter(item => {
+      const identity = getPlaylistItemMediaIdentity_(item) || getPlaylistItemKey_(item);
+      if (!identity || seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
+  }
+
   function playlistHasItem_(list, itemOrKey) {
     if (!list || !Array.isArray(list.items)) return false;
     const key = typeof itemOrKey === "string" && itemOrKey.includes(":")
       ? itemOrKey
       : getPlaylistItemKey_(itemOrKey);
-    if (!key) return false;
-    return list.items.some(item => getPlaylistItemKey_(item) === key);
+    const identity = getPlaylistItemMediaIdentity_(itemOrKey);
+    if (!key && !identity) return false;
+    return list.items.some(item => {
+      if (key && getPlaylistItemKey_(item) === key) return true;
+      return Boolean(identity && getPlaylistItemMediaIdentity_(item) === identity);
+    });
   }
 
   function makeExternalPlaylistEntryFromCard_(card, kind) {
