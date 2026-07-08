@@ -302,6 +302,9 @@
   let youtubeClosePulseTimer = null;
   const modalCloseAttentionTimers = new WeakMap();
   let pendingCoverPlaylistHydrationPromise = null;
+  let pendingCoverPlaylistHydrationRerun = false;
+  let pendingCoverPlaylistHydrationRetryTimer = null;
+  let pendingCoverPlaylistHydrationRetryCount = 0;
   const coverTitleResolutionPromises = new Map();
   let burninShieldEl = null;
   let burninShieldTextEl = null;
@@ -4415,8 +4418,7 @@
     return changed;
   }
 
-  function resolvePendingStoredCoverPlaylistEntries_() {
-    if (pendingCoverPlaylistHydrationPromise) return pendingCoverPlaylistHydrationPromise;
+  function getPendingStoredCoverPlaylistEntries_() {
     const pendingEntries = [];
     playlists.forEach(list => {
       if (!Array.isArray(list.items)) return;
@@ -4432,7 +4434,34 @@
         });
       });
     });
-    if (!pendingEntries.length) return Promise.resolve();
+    return pendingEntries;
+  }
+
+  function schedulePendingCoverPlaylistHydrationRetry_() {
+    if (pendingCoverPlaylistHydrationRetryTimer || pendingCoverPlaylistHydrationRetryCount >= 3) return;
+    const delays = [2000, 5000, 10000];
+    const delay = delays[pendingCoverPlaylistHydrationRetryCount] || delays[delays.length - 1];
+    pendingCoverPlaylistHydrationRetryCount += 1;
+    pendingCoverPlaylistHydrationRetryTimer = window.setTimeout(() => {
+      pendingCoverPlaylistHydrationRetryTimer = null;
+      void resolvePendingStoredCoverPlaylistEntries_();
+    }, delay);
+  }
+
+  function resolvePendingStoredCoverPlaylistEntries_() {
+    if (pendingCoverPlaylistHydrationPromise) {
+      pendingCoverPlaylistHydrationRerun = true;
+      return pendingCoverPlaylistHydrationPromise;
+    }
+    const pendingEntries = getPendingStoredCoverPlaylistEntries_();
+    if (!pendingEntries.length) {
+      pendingCoverPlaylistHydrationRetryCount = 0;
+      if (pendingCoverPlaylistHydrationRetryTimer) {
+        window.clearTimeout(pendingCoverPlaylistHydrationRetryTimer);
+        pendingCoverPlaylistHydrationRetryTimer = null;
+      }
+      return Promise.resolve();
+    }
 
     pendingCoverPlaylistHydrationPromise = (async () => {
       let changed = false;
@@ -4464,6 +4493,18 @@
       }
     })().finally(() => {
       pendingCoverPlaylistHydrationPromise = null;
+      if (pendingCoverPlaylistHydrationRerun) {
+        pendingCoverPlaylistHydrationRerun = false;
+        window.setTimeout(() => {
+          void resolvePendingStoredCoverPlaylistEntries_();
+        }, 0);
+        return;
+      }
+      if (getPendingStoredCoverPlaylistEntries_().length) {
+        schedulePendingCoverPlaylistHydrationRetry_();
+      } else {
+        pendingCoverPlaylistHydrationRetryCount = 0;
+      }
     });
     return pendingCoverPlaylistHydrationPromise;
   }
