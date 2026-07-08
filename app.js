@@ -58,6 +58,12 @@
   const PLAYLIST_END_FADE_TRIGGER_SECONDS = 1.5;
   const PLAYLIST_SHARE_FORMAT_VERSION = 1;
   const PLAYLIST_SHARE_PREFIX = "UREI-PL";
+  const PLAYLIST_SHARE_MAX_CODE_LENGTH = 100_000;
+  const PLAYLIST_SHARE_MAX_COMPRESSED_BYTES = 75_000;
+  const PLAYLIST_SHARE_MAX_DECOMPRESSED_BYTES = 1_000_000;
+  const PLAYLIST_SHARE_MAX_ITEMS = 500;
+  const PLAYLIST_SHARE_MAX_NAME_LENGTH = 80;
+  const PLAYLIST_SHARE_MAX_ITEM_STRING_LENGTH = 100;
   const DEFAULT_PLAYLIST_NAME = "기본";
   const DEFAULT_PLAYLIST_SEED_ITEMS = [
     {
@@ -5819,6 +5825,59 @@
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
+  async function decompressBytesWithLimit_(bytes, format, maxBytes) {
+    if (typeof window.DecompressionStream !== "function") throw new Error("decompress stream unsupported");
+    const reader = new Blob([bytes]).stream().pipeThrough(new window.DecompressionStream(format)).getReader();
+    const chunks = [];
+    let total = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel();
+          throw new Error("decompressed size limit exceeded");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+    const result = new Uint8Array(total);
+    let offset = 0;
+    chunks.forEach(chunk => {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    });
+    return result;
+  }
+
+  function validatePlaylistSharePayload_(parsed, version) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Number(parsed.v) !== version || !Array.isArray(parsed.i)) {
+      throw new Error("공유코드 내부 데이터 형식이 올바르지 않습니다.");
+    }
+    const name = String(parsed.n || "가져온 플레이리스트").trim() || "가져온 플레이리스트";
+    if (name.length > PLAYLIST_SHARE_MAX_NAME_LENGTH) {
+      throw new Error(`플레이리스트 이름은 최대 ${PLAYLIST_SHARE_MAX_NAME_LENGTH}자까지 사용할 수 있습니다.`);
+    }
+    if (parsed.i.length > PLAYLIST_SHARE_MAX_ITEMS) {
+      throw new Error(`공유 플레이리스트는 최대 ${PLAYLIST_SHARE_MAX_ITEMS}곡까지 가져올 수 있습니다.`);
+    }
+    parsed.i.forEach(rawItem => {
+      if (typeof rawItem === "string") {
+        if (rawItem.length > PLAYLIST_SHARE_MAX_ITEM_STRING_LENGTH) {
+          throw new Error("공유코드의 곡 ID가 허용 길이를 초과했습니다.");
+        }
+        return;
+      }
+      if (!Array.isArray(rawItem) || rawItem.length !== 2 || rawItem.some(value => typeof value !== "string" || value.length > PLAYLIST_SHARE_MAX_ITEM_STRING_LENGTH)) {
+        throw new Error("공유코드의 커버곡 항목 형식이 올바르지 않습니다.");
+      }
+    });
+    return { name, items: parsed.i };
+  }
+
   async function sha256Hex_(text) {
     if (!window.crypto || !window.crypto.subtle) throw new Error("SHA-256을 지원하지 않는 환경입니다.");
     const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text || "")));
@@ -5869,40 +5928,72 @@
 
   async function createPlaylistShareCode_(list) {
     const exported = makePlaylistShareData_(list);
+    validatePlaylistSharePayload_(exported.data, PLAYLIST_SHARE_FORMAT_VERSION);
     const sourceBytes = new TextEncoder().encode(JSON.stringify(exported.data));
+    if (sourceBytes.byteLength > PLAYLIST_SHARE_MAX_DECOMPRESSED_BYTES) {
+      throw new Error("플레이리스트 공유 데이터가 허용된 최대 크기를 초과했습니다.");
+    }
     let status = "R";
     let encodedBytes = sourceBytes;
     try {
       encodedBytes = await transformBytesWithStream_(sourceBytes, "compress", "gzip");
       status = "G";
     } catch {}
+    if (encodedBytes.byteLength > PLAYLIST_SHARE_MAX_COMPRESSED_BYTES) {
+      throw new Error("플레이리스트 공유코드가 허용된 최대 크기를 초과했습니다.");
+    }
     const payload = bytesToBase64Url_(encodedBytes);
     const checksum = (await sha256Hex_(payload)).slice(0, 8);
+    const code = `${PLAYLIST_SHARE_PREFIX}${PLAYLIST_SHARE_FORMAT_VERSION}-${status}-${checksum.slice(0, 4)}${payload}${checksum.slice(4, 8)}`;
+    if (code.length > PLAYLIST_SHARE_MAX_CODE_LENGTH) {
+      throw new Error("플레이리스트 공유코드가 허용된 최대 길이를 초과했습니다.");
+    }
     return {
-      code: `${PLAYLIST_SHARE_PREFIX}${PLAYLIST_SHARE_FORMAT_VERSION}-${status}-${checksum.slice(0, 4)}${payload}${checksum.slice(4, 8)}`,
+      code,
       skippedCount: exported.skippedCount,
       itemCount: exported.data.i.length
     };
   }
 
   async function parsePlaylistShareCode_(code) {
-    const source = String(code || "").replace(/\s+/g, "").trim();
+    const rawSource = String(code || "");
+    if (rawSource.length > PLAYLIST_SHARE_MAX_CODE_LENGTH) {
+      throw new Error(`공유코드는 최대 ${PLAYLIST_SHARE_MAX_CODE_LENGTH.toLocaleString()}자까지 입력할 수 있습니다.`);
+    }
+    const source = rawSource.replace(/\s+/g, "").trim();
     const match = source.match(/^UREI-PL(\d+)-([GR])-([0-9a-fA-F]{4})(.+)([0-9a-fA-F]{4})$/);
     if (!match) throw new Error("공유코드 형식이 올바르지 않습니다.");
     const version = Number(match[1]);
     if (version !== PLAYLIST_SHARE_FORMAT_VERSION) throw new Error(`지원하지 않는 공유코드 규격 버전입니다: ${version}`);
     const status = match[2];
     const payload = match[4];
+    const estimatedBytes = Math.floor(payload.length * 3 / 4);
+    if (estimatedBytes > PLAYLIST_SHARE_MAX_COMPRESSED_BYTES) {
+      throw new Error("공유코드 데이터가 허용된 최대 크기를 초과했습니다.");
+    }
     const expectedChecksum = `${match[3]}${match[5]}`.toLowerCase();
     const actualChecksum = (await sha256Hex_(payload)).slice(0, 8).toLowerCase();
     if (actualChecksum !== expectedChecksum) throw new Error("공유코드가 손상되었거나 일부가 누락되었습니다.");
-    let bytes = base64UrlToBytes_(payload);
+    let bytes;
+    try {
+      bytes = base64UrlToBytes_(payload);
+    } catch {
+      throw new Error("공유코드의 인코딩 형식이 올바르지 않습니다.");
+    }
+    if (bytes.byteLength > PLAYLIST_SHARE_MAX_COMPRESSED_BYTES) {
+      throw new Error("공유코드 데이터가 허용된 최대 크기를 초과했습니다.");
+    }
     if (status === "G") {
       try {
-        bytes = await transformBytesWithStream_(bytes, "decompress", "gzip");
-      } catch {
-        throw new Error("이 브라우저에서는 압축된 공유코드를 해제할 수 없습니다.");
+        bytes = await decompressBytesWithLimit_(bytes, "gzip", PLAYLIST_SHARE_MAX_DECOMPRESSED_BYTES);
+      } catch (error) {
+        if (String(error && error.message || "").includes("size limit")) {
+          throw new Error("압축 해제된 공유 데이터가 허용된 최대 크기를 초과했습니다.");
+        }
+        throw new Error("이 브라우저에서는 압축된 공유코드를 해제할 수 없거나 공유코드가 손상되었습니다.");
       }
+    } else if (bytes.byteLength > PLAYLIST_SHARE_MAX_DECOMPRESSED_BYTES) {
+      throw new Error("공유 데이터가 허용된 최대 크기를 초과했습니다.");
     }
     let parsed;
     try {
@@ -5910,13 +6001,11 @@
     } catch {
       throw new Error("공유코드의 데이터 내용을 읽을 수 없습니다.");
     }
-    if (!parsed || typeof parsed !== "object" || Number(parsed.v) !== version || !Array.isArray(parsed.i)) {
-      throw new Error("공유코드 내부 데이터 형식이 올바르지 않습니다.");
-    }
+    const validated = validatePlaylistSharePayload_(parsed, version);
     return {
       version,
-      name: String(parsed.n || "가져온 플레이리스트").trim() || "가져온 플레이리스트",
-      items: parsed.i
+      name: validated.name,
+      items: validated.items
     };
   }
 
