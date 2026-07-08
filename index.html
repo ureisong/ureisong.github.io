@@ -256,7 +256,13 @@
   <div id="playlistModal" class="mini-modal-overlay playlist-modal-overlay" data-playlist-feature hidden>
     <div class="playlist-modal-card" role="dialog" aria-modal="true" aria-label="플레이리스트 관리">
       <button id="playlistModalClose" class="modal-close mini-modal-close" type="button" aria-label="닫기">×</button>
-      <h2>플레이리스트</h2>
+      <div class="playlist-modal-title-row">
+        <h2>플레이리스트</h2>
+        <div class="playlist-share-buttons">
+          <button id="playlistExportButton" type="button" title="내보내기" aria-label="내보내기">🔼</button>
+          <button id="playlistImportButton" type="button" title="가져오기" aria-label="가져오기">🔽</button>
+        </div>
+      </div>
       <select id="playlistSelect" aria-label="플레이리스트 선택"></select>
       <input id="playlistNameInput" class="playlist-name-input" type="text" placeholder="플레이리스트 이름" hidden />
       <div id="playlistActionRow" class="playlist-action-row">
@@ -275,6 +281,41 @@
         <button id="playlistReverseButton" type="button" disabled>뒤집기</button>
         <button id="playlistClearButton" type="button" disabled>전체선택</button>
         <button id="playlistRemoveSelectedButton" type="button" disabled>선택삭제</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlistImportModal" class="mini-modal-overlay" hidden>
+    <div class="mini-modal-card playlist-share-code-card" role="dialog" aria-modal="true" aria-label="플레이리스트 공유코드 가져오기">
+      <button id="playlistImportModalClose" class="modal-close mini-modal-close" type="button" aria-label="닫기">×</button>
+      <h2>플레이리스트 가져오기</h2>
+      <textarea id="playlistImportCodeInput" class="playlist-share-code-input" placeholder="공유코드를 붙여넣어 주세요" spellcheck="false"></textarea>
+      <div class="playlist-share-modal-actions">
+        <button id="playlistImportCodeConfirmButton" type="button">가져오기</button>
+        <button id="playlistImportCodeCancelButton" type="button">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="playlistImportPreviewModal" class="mini-modal-overlay" hidden>
+    <div class="mini-modal-card playlist-import-preview-card" role="dialog" aria-modal="true" aria-label="플레이리스트 가져오기 확인">
+      <button id="playlistImportPreviewModalClose" class="modal-close mini-modal-close" type="button" aria-label="닫기">×</button>
+      <div class="playlist-import-mode-row" role="radiogroup" aria-label="가져오기 방식">
+        <label><input type="radio" name="playlistImportMode" value="new" checked> 새로운 플리로 추가</label>
+        <label><input type="radio" name="playlistImportMode" value="merge"> 기존의 플리에 병합</label>
+      </div>
+      <div class="playlist-import-target-row">
+        <input id="playlistImportNewName" type="text" aria-label="새 플레이리스트 이름">
+        <select id="playlistImportMergeSelect" aria-label="병합할 플레이리스트" disabled></select>
+      </div>
+      <div class="playlist-import-preview-heading">
+        <strong id="playlistImportPreviewName"></strong>
+        <span id="playlistImportPreviewSummary"></span>
+      </div>
+      <div id="playlistImportPreviewItems" class="playlist-import-preview-items"></div>
+      <div class="playlist-share-modal-actions">
+        <button id="playlistImportPreviewApplyButton" type="button">적용</button>
+        <button id="playlistImportPreviewCancelButton" type="button">취소</button>
       </div>
     </div>
   </div>

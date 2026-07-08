@@ -56,6 +56,8 @@
   const PLAYLIST_VOLUME_MONITOR_INTERVAL_MS = 300;
   const PLAYLIST_VOLUME_USER_CHANGE_THRESHOLD = 2;
   const PLAYLIST_END_FADE_TRIGGER_SECONDS = 1.5;
+  const PLAYLIST_SHARE_FORMAT_VERSION = 1;
+  const PLAYLIST_SHARE_PREFIX = "UREI-PL";
   const DEFAULT_PLAYLIST_NAME = "기본";
   const DEFAULT_PLAYLIST_SEED_ITEMS = [
     {
@@ -151,6 +153,22 @@
     playlistSummaryName: document.getElementById("playlistSummaryName"),
     playlistModal: document.getElementById("playlistModal"),
     playlistModalClose: document.getElementById("playlistModalClose"),
+    playlistExportButton: document.getElementById("playlistExportButton"),
+    playlistImportButton: document.getElementById("playlistImportButton"),
+    playlistImportModal: document.getElementById("playlistImportModal"),
+    playlistImportModalClose: document.getElementById("playlistImportModalClose"),
+    playlistImportCodeInput: document.getElementById("playlistImportCodeInput"),
+    playlistImportCodeConfirmButton: document.getElementById("playlistImportCodeConfirmButton"),
+    playlistImportCodeCancelButton: document.getElementById("playlistImportCodeCancelButton"),
+    playlistImportPreviewModal: document.getElementById("playlistImportPreviewModal"),
+    playlistImportPreviewModalClose: document.getElementById("playlistImportPreviewModalClose"),
+    playlistImportPreviewName: document.getElementById("playlistImportPreviewName"),
+    playlistImportPreviewSummary: document.getElementById("playlistImportPreviewSummary"),
+    playlistImportPreviewItems: document.getElementById("playlistImportPreviewItems"),
+    playlistImportNewName: document.getElementById("playlistImportNewName"),
+    playlistImportMergeSelect: document.getElementById("playlistImportMergeSelect"),
+    playlistImportPreviewApplyButton: document.getElementById("playlistImportPreviewApplyButton"),
+    playlistImportPreviewCancelButton: document.getElementById("playlistImportPreviewCancelButton"),
     playlistNameInput: document.getElementById("playlistNameInput"),
     playlistCreateButton: document.getElementById("playlistCreateButton"),
     playlistSelect: document.getElementById("playlistSelect"),
@@ -282,6 +300,9 @@
   let cooldownCrossfadeTimer = null;
   let cooldownClearTimer = null;
   let youtubeClosePulseTimer = null;
+  const modalCloseAttentionTimers = new WeakMap();
+  let pendingCoverPlaylistHydrationPromise = null;
+  const coverTitleResolutionPromises = new Map();
   let burninShieldEl = null;
   let burninShieldTextEl = null;
   let burninShieldLoopTimer = null;
@@ -291,6 +312,7 @@
   let dateGroupLongPressTimer = null;
   let dateGroupLongPressPointerId = null;
   let suppressPageLoadingForInitialShare = false;
+  let playlistImportPreviewState = null;
 
   document.addEventListener("DOMContentLoaded", init);
 
@@ -784,6 +806,7 @@
           recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
           channelItems = normalizeChannelItems(cached.channels || []);
           hydrateStoredCoverPlaylistEntries_();
+          void resolvePendingStoredCoverPlaylistEntries_();
           likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
           playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
           applyPlaylistEnabledState(playlistEnabled);
@@ -807,6 +830,7 @@
       recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
       channelItems = normalizeChannelItems(payload.channels || []);
       hydrateStoredCoverPlaylistEntries_();
+      void resolvePendingStoredCoverPlaylistEntries_();
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
       applyPlaylistEnabledState(playlistEnabled);
@@ -844,6 +868,7 @@
         recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
         channelItems = normalizeChannelItems(cached.channels || []);
         hydrateStoredCoverPlaylistEntries_();
+        void resolvePendingStoredCoverPlaylistEntries_();
         likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
         playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
         applyPlaylistEnabledState(playlistEnabled);
@@ -2512,6 +2537,8 @@
     coverItems = normalizeCoverItems(payload.covers || []);
     recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
     channelItems = normalizeChannelItems(payload.channels || []);
+    hydrateStoredCoverPlaylistEntries_();
+    void resolvePendingStoredCoverPlaylistEntries_();
     likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
     playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
     applyPlaylistEnabledState(playlistEnabled);
@@ -4332,6 +4359,115 @@
     if (changed) savePlaylists();
   }
 
+  function isPendingCoverTitle_(value) {
+    return !String(value || "").trim() || String(value || "").trim() === "커버곡을 불러오는 중...";
+  }
+
+  async function fetchYoutubeOembedTitleWithRetry_(url, attempts = 3) {
+    for (let index = 0; index < attempts; index += 1) {
+      const title = await fetchYoutubeOembedTitle(url);
+      if (title) return title;
+      if (index + 1 < attempts) await new Promise(resolve => window.setTimeout(resolve, 1200 * (index + 1)));
+    }
+    return "";
+  }
+
+  function resolveExactCoverTitle_(cover, attempts = 5) {
+    const videoId = String(cover && cover.videoId || extractYoutubeVideoId(cover && cover.url || "")).trim();
+    const url = String(cover && cover.url || (videoId ? `https://youtu.be/${videoId}` : "")).trim();
+    const readyTitle = String(cover && cover.title || "").trim();
+    if (readyTitle && !isPendingCoverTitle_(readyTitle)) return Promise.resolve(readyTitle);
+    if (!url) return Promise.resolve("");
+    const key = videoId || url;
+    if (coverTitleResolutionPromises.has(key)) return coverTitleResolutionPromises.get(key);
+    const promise = fetchYoutubeOembedTitleWithRetry_(url, attempts).finally(() => {
+      coverTitleResolutionPromises.delete(key);
+    });
+    coverTitleResolutionPromises.set(key, promise);
+    return promise;
+  }
+
+  function applyResolvedCoverTitleToStoredEntries_(coverId, videoId, title, sourceCover = null) {
+    const key = String(coverId || "").trim().toUpperCase();
+    const video = String(videoId || "").trim();
+    let changed = false;
+    playlists.forEach(list => {
+      if (!Array.isArray(list.items)) return;
+      list.items = list.items.map(item => {
+        if (!item || typeof item !== "object" || item.type !== "external") return item;
+        const itemMatch = String(item.key || "").match(/^external:(COVER_\d+)$/i);
+        const sameId = Boolean(key && itemMatch && itemMatch[1].toUpperCase() === key);
+        const sameVideo = Boolean(video && String(item.videoId || extractYoutubeVideoId(item.url || "")) === video);
+        if (!sameId && !sameVideo) return item;
+        const next = {
+          ...item,
+          key: `external:${String(sourceCover && sourceCover.id || key || itemMatch && itemMatch[1] || "").trim()}`,
+          url: String(sourceCover && sourceCover.url || item.url || (video ? `https://youtu.be/${video}` : "")).trim(),
+          videoId: String(sourceCover && sourceCover.videoId || video || item.videoId || "").trim(),
+          playlistId: "",
+          title,
+          section: String(sourceCover && sourceCover.section || item.section || "커버곡").trim() || "커버곡"
+        };
+        if (JSON.stringify(next) !== JSON.stringify(item)) changed = true;
+        return next;
+      });
+    });
+    return changed;
+  }
+
+  function resolvePendingStoredCoverPlaylistEntries_() {
+    if (pendingCoverPlaylistHydrationPromise) return pendingCoverPlaylistHydrationPromise;
+    const pendingEntries = [];
+    playlists.forEach(list => {
+      if (!Array.isArray(list.items)) return;
+      list.items.forEach(item => {
+        if (!item || typeof item !== "object" || item.type !== "external" || !isPendingCoverTitle_(item.title)) return;
+        const match = String(item.key || "").match(/^external:(COVER_\d+)$/i);
+        if (!match) return;
+        pendingEntries.push({
+          coverId: match[1].toUpperCase(),
+          videoId: String(item.videoId || extractYoutubeVideoId(item.url || "")).trim(),
+          url: String(item.url || "").trim(),
+          section: String(item.section || "커버곡").trim() || "커버곡"
+        });
+      });
+    });
+    if (!pendingEntries.length) return Promise.resolve();
+
+    pendingCoverPlaylistHydrationPromise = (async () => {
+      let changed = false;
+      const handled = new Set();
+      for (const entry of pendingEntries) {
+        const identity = `${entry.coverId}|${entry.videoId || entry.url}`;
+        if (handled.has(identity)) continue;
+        handled.add(identity);
+        const stored = getStoredCoverItemById_(entry.coverId);
+        const cover = stored || {
+          id: entry.coverId,
+          videoId: entry.videoId,
+          url: entry.url || (entry.videoId ? `https://youtu.be/${entry.videoId}` : ""),
+          title: "",
+          section: entry.section
+        };
+        const title = await resolveExactCoverTitle_(cover, 5);
+        if (!title) continue;
+        const resolved = { ...cover, title };
+        const current = coverItems.find(item => item.id === entry.coverId);
+        if (current) Object.assign(current, resolved);
+        if (applyResolvedCoverTitleToStoredEntries_(entry.coverId, entry.videoId || resolved.videoId, title, resolved)) changed = true;
+      }
+      if (changed) {
+        savePlaylists();
+        persistCoverItemsToLocalCache_();
+        renderPlaylistSummary();
+        if (els.playlistModal && !els.playlistModal.hidden) renderPlaylistManager();
+      }
+    })().finally(() => {
+      pendingCoverPlaylistHydrationPromise = null;
+    });
+    return pendingCoverPlaylistHydrationPromise;
+  }
+
   async function fetchYoutubeOembedTitle(url) {
     const endpoints = [
       `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`,
@@ -4521,14 +4657,13 @@
     if (!key) return null;
     if (findSongById(key)) return key;
 
-    let cover = getStoredCoverItemById_(key);
+    let cover = coverItems.find(item => String(item.id || "").trim() === key) || null;
     if (!cover || !cover.url) return null;
 
-    const pendingTitle = !cover.title || cover.title === "커버곡을 불러오는 중...";
-    if (pendingTitle) {
-      const fetchedTitle = await fetchYoutubeOembedTitle(cover.url);
-      const resolvedTitle = fetchedTitle || getResolvedCoverFallbackTitle_(cover);
-      cover = { ...cover, title: resolvedTitle };
+    const exactTitle = await resolveExactCoverTitle_(cover, 5);
+    if (!exactTitle) return null;
+    if (cover.title !== exactTitle) {
+      cover = { ...cover, title: exactTitle };
       updateResolvedCoverItem_(key, cover);
     }
 
@@ -4538,7 +4673,7 @@
       url: cover.url,
       videoId: cover.videoId || extractYoutubeVideoId(cover.url),
       playlistId: "",
-      title: cover.title || getResolvedCoverFallbackTitle_(cover),
+      title: exactTitle,
       section: cover.section || "커버곡"
     };
   }
@@ -5618,7 +5753,437 @@
     return name;
   }
 
+  function bytesToBase64Url_(bytes) {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function base64UrlToBytes_(value) {
+    const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  async function transformBytesWithStream_(bytes, mode, format) {
+    const StreamClass = mode === "compress" ? window.CompressionStream : window.DecompressionStream;
+    if (typeof StreamClass !== "function") throw new Error(`${mode} stream unsupported`);
+    const stream = new Blob([bytes]).stream().pipeThrough(new StreamClass(format));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function sha256Hex_(text) {
+    if (!window.crypto || !window.crypto.subtle) throw new Error("SHA-256을 지원하지 않는 환경입니다.");
+    const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text || "")));
+    return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function getCoverIdFromPlaylistItem_(item) {
+    if (!item || typeof item !== "object") return "";
+    const candidates = [item.id, item.key];
+    for (const candidate of candidates) {
+      const match = String(candidate || "").match(/(?:^|external:)(COVER_\d+)$/i);
+      if (match) return match[1].toUpperCase();
+    }
+    const identity = getPlaylistItemMediaIdentity_(item);
+    const videoId = identity.startsWith("video:") ? identity.slice(6) : "";
+    if (!videoId) return "";
+    const cover = coverItems.find(value => String(value.videoId || "") === videoId);
+    return cover ? String(cover.id || "").trim() : "";
+  }
+
+  function makePlaylistShareData_(list) {
+    const skipped = [];
+    const items = [];
+    (list && Array.isArray(list.items) ? list.items : []).forEach(item => {
+      if (typeof item === "string") {
+        const id = item.trim();
+        if (id) items.push(id);
+        return;
+      }
+      const normalized = normalizePlaylistItem_(item);
+      const coverId = getCoverIdFromPlaylistItem_(normalized);
+      const videoId = normalized && String(normalized.videoId || extractYoutubeVideoId(normalized.url) || "").trim();
+      if (coverId && videoId) {
+        items.push([coverId, videoId]);
+        return;
+      }
+      skipped.push(item);
+    });
+    return {
+      data: {
+        v: PLAYLIST_SHARE_FORMAT_VERSION,
+        n: String(list && list.name || "플레이리스트").trim() || "플레이리스트",
+        i: items
+      },
+      skippedCount: skipped.length
+    };
+  }
+
+  async function createPlaylistShareCode_(list) {
+    const exported = makePlaylistShareData_(list);
+    const sourceBytes = new TextEncoder().encode(JSON.stringify(exported.data));
+    let status = "R";
+    let encodedBytes = sourceBytes;
+    try {
+      encodedBytes = await transformBytesWithStream_(sourceBytes, "compress", "gzip");
+      status = "G";
+    } catch {}
+    const payload = bytesToBase64Url_(encodedBytes);
+    const checksum = (await sha256Hex_(payload)).slice(0, 8);
+    return {
+      code: `${PLAYLIST_SHARE_PREFIX}${PLAYLIST_SHARE_FORMAT_VERSION}-${status}-${checksum.slice(0, 4)}${payload}${checksum.slice(4, 8)}`,
+      skippedCount: exported.skippedCount,
+      itemCount: exported.data.i.length
+    };
+  }
+
+  async function parsePlaylistShareCode_(code) {
+    const source = String(code || "").replace(/\s+/g, "").trim();
+    const match = source.match(/^UREI-PL(\d+)-([GR])-([0-9a-fA-F]{4})(.+)([0-9a-fA-F]{4})$/);
+    if (!match) throw new Error("공유코드 형식이 올바르지 않습니다.");
+    const version = Number(match[1]);
+    if (version !== PLAYLIST_SHARE_FORMAT_VERSION) throw new Error(`지원하지 않는 공유코드 규격 버전입니다: ${version}`);
+    const status = match[2];
+    const payload = match[4];
+    const expectedChecksum = `${match[3]}${match[5]}`.toLowerCase();
+    const actualChecksum = (await sha256Hex_(payload)).slice(0, 8).toLowerCase();
+    if (actualChecksum !== expectedChecksum) throw new Error("공유코드가 손상되었거나 일부가 누락되었습니다.");
+    let bytes = base64UrlToBytes_(payload);
+    if (status === "G") {
+      try {
+        bytes = await transformBytesWithStream_(bytes, "decompress", "gzip");
+      } catch {
+        throw new Error("이 브라우저에서는 압축된 공유코드를 해제할 수 없습니다.");
+      }
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      throw new Error("공유코드의 데이터 내용을 읽을 수 없습니다.");
+    }
+    if (!parsed || typeof parsed !== "object" || Number(parsed.v) !== version || !Array.isArray(parsed.i)) {
+      throw new Error("공유코드 내부 데이터 형식이 올바르지 않습니다.");
+    }
+    return {
+      version,
+      name: String(parsed.n || "가져온 플레이리스트").trim() || "가져온 플레이리스트",
+      items: parsed.i
+    };
+  }
+
+  function findCoverItemForImport_(coverId, videoId) {
+    const id = String(coverId || "").trim().toUpperCase();
+    const video = String(videoId || "").trim();
+    const byId = getStoredCoverItemById_(id);
+    if (byId && (!video || String(byId.videoId || "") === video)) return byId;
+    const currentByVideo = coverItems.find(item => String(item.videoId || "") === video);
+    if (currentByVideo) return currentByVideo;
+    const cached = readLocalJsonCache();
+    const storedByVideo = normalizeCoverItems(cached && cached.covers || []).find(item => String(item.videoId || "") === video);
+    return storedByVideo || byId || null;
+  }
+
+  async function resolveSharedPlaylistItem_(rawItem) {
+    if (typeof rawItem === "string") {
+      const id = rawItem.trim();
+      const song = findSongById(id);
+      if (!id || !song || !canAddSongToPlaylist(song)) {
+        return { valid: false, label: id || "빈 곡 ID", reason: "곡을 찾을 수 없음" };
+      }
+      return {
+        valid: true,
+        item: id,
+        label: `${getDisplayTitle(song)} - ${getRawDisplayArtist(song) || getDisplayArtist(song)}`
+      };
+    }
+
+    if (!Array.isArray(rawItem) || rawItem.length < 2) {
+      return { valid: false, label: String(rawItem || "알 수 없는 항목"), reason: "항목 형식 오류" };
+    }
+
+    const coverId = String(rawItem[0] || "").trim().toUpperCase();
+    const videoId = String(rawItem[1] || "").trim();
+    if (!/^COVER_\d+$/.test(coverId) || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      return { valid: false, label: `${coverId || "COVER"} / ${videoId || "영상 ID 없음"}`, reason: "커버곡 형식 오류" };
+    }
+
+    const cover = findCoverItemForImport_(coverId, videoId);
+    let title = String(cover && cover.title || "").trim();
+    const section = String(cover && cover.section || "커버곡").trim() || "커버곡";
+    const url = String(cover && cover.url || `https://youtu.be/${videoId}`).trim();
+    if (!title || title === "커버곡을 불러오는 중...") {
+      try { title = await fetchYoutubeOembedTitle(url); } catch {}
+    }
+    title = title || (section === "오리지널 곡" ? "YouTube 오리지널 곡" : "YouTube 커버곡");
+    return {
+      valid: true,
+      item: {
+        type: "external",
+        key: `external:${cover && cover.id || coverId}`,
+        url,
+        videoId,
+        playlistId: "",
+        title,
+        section
+      },
+      label: `${title} - ${section}`
+    };
+  }
+
+  async function resolvePlaylistShareItems_(rawItems) {
+    const results = [];
+    for (const rawItem of rawItems) results.push(await resolveSharedPlaylistItem_(rawItem));
+    const uniqueItems = [];
+    const validResultIndexes = [];
+    results.forEach((result, index) => {
+      if (!result.valid) return;
+      const candidate = result.item;
+      const identity = getPlaylistItemMediaIdentity_(candidate) || getPlaylistItemKey_(candidate);
+      if (!identity || uniqueItems.some(item => (getPlaylistItemMediaIdentity_(item) || getPlaylistItemKey_(item)) === identity)) {
+        result.valid = false;
+        result.reason = "중복 항목";
+        return;
+      }
+      uniqueItems.push(candidate);
+      validResultIndexes.push(index);
+    });
+    return { results, validItems: uniqueItems, validResultIndexes };
+  }
+
+  function setNestedPlaylistModalOpen_(modal, open) {
+    if (!modal) return;
+    modal.hidden = !open;
+    if (open) document.body.classList.add("modal-open");
+    else if (
+      (!els.youtubeModal || els.youtubeModal.hidden) &&
+      (!els.playlistModal || els.playlistModal.hidden) &&
+      (!els.playlistImportModal || els.playlistImportModal.hidden) &&
+      (!els.playlistImportPreviewModal || els.playlistImportPreviewModal.hidden)
+    ) document.body.classList.remove("modal-open");
+  }
+
+  function openPlaylistImportModal_() {
+    if (!els.playlistImportModal) return;
+    if (els.playlistImportCodeInput) els.playlistImportCodeInput.value = "";
+    setNestedPlaylistModalOpen_(els.playlistImportModal, true);
+    window.setTimeout(() => els.playlistImportCodeInput && els.playlistImportCodeInput.focus(), 20);
+  }
+
+  function closePlaylistImportModal_() {
+    setNestedPlaylistModalOpen_(els.playlistImportModal, false);
+  }
+
+  function closePlaylistImportPreviewModal_() {
+    playlistImportPreviewState = null;
+    setNestedPlaylistModalOpen_(els.playlistImportPreviewModal, false);
+  }
+
+  function getPlaylistImportPreviewRows_() {
+    if (!playlistImportPreviewState) return { rows: [], validItems: [], duplicateCount: 0, excludedCount: 0 };
+    const mode = playlistImportImportModeValue_();
+    const targetId = String(els.playlistImportMergeSelect && els.playlistImportMergeSelect.value || "").trim();
+    const target = mode === "merge" ? playlists.find(list => list.id === targetId) : null;
+    const rows = playlistImportPreviewState.results.map(result => {
+      if (!result.valid || !result.item) {
+        const duplicate = String(result.reason || "") === "중복 항목";
+        return { ...result, addable: false, duplicate, reason: result.reason || "정보 없음/제외" };
+      }
+      if (target && playlistHasItem_(target, result.item)) {
+        return { ...result, addable: false, duplicate: true, reason: "선택한 플레이리스트에 이미 존재" };
+      }
+      return { ...result, addable: true, duplicate: false, reason: "추가 가능" };
+    });
+    const validItems = rows.filter(row => row.addable).map(row => row.item);
+    const duplicateCount = rows.filter(row => row.duplicate).length;
+    const excludedCount = rows.filter(row => !row.addable && !row.duplicate).length;
+    return { rows, validItems, duplicateCount, excludedCount };
+  }
+
+  function refreshPlaylistImportPreviewMarquees_() {
+    if (!els.playlistImportPreviewItems) return;
+    els.playlistImportPreviewItems.querySelectorAll(".playlist-import-preview-label").forEach(label => {
+      const inner = label.querySelector(".modal-marquee-inner");
+      if (!inner) return;
+      label.classList.remove("modal-marquee-active");
+      label.style.removeProperty("--modal-marquee-distance");
+      label.style.removeProperty("--modal-marquee-duration");
+      const distance = Math.ceil(inner.scrollWidth - label.clientWidth);
+      if (distance <= 2) return;
+      const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+      label.style.setProperty("--modal-marquee-distance", `${distance}px`);
+      label.style.setProperty("--modal-marquee-duration", `${4 + moveSeconds * 2}s`);
+      label.classList.add("modal-marquee-active");
+    });
+  }
+
+  function refreshPlaylistImportPreview_() {
+    if (!playlistImportPreviewState) return;
+    const computed = getPlaylistImportPreviewRows_();
+    playlistImportPreviewState.currentValidItems = computed.validItems;
+    if (els.playlistImportPreviewSummary) {
+      els.playlistImportPreviewSummary.textContent = `전체 ${playlistImportPreviewState.rawCount}곡 · 중복 ${computed.duplicateCount}곡 · 추가 가능 ${computed.validItems.length}곡 · 정보 없음/제외 ${computed.excludedCount}곡`;
+    }
+    if (els.playlistImportPreviewItems) {
+      els.playlistImportPreviewItems.innerHTML = computed.rows.map((result, index) => `
+        <div class="playlist-import-preview-item ${result.addable ? "is-valid" : "is-invalid"}" title="${escapeHtml(result.reason || "")}">
+          <span class="playlist-import-preview-index">${index + 1}</span>
+          <span class="playlist-import-preview-label"><span class="modal-marquee-inner">${escapeHtml(result.label || "알 수 없는 항목")}</span></span>
+          <span class="playlist-import-preview-state" aria-label="${result.addable ? "추가 가능" : "추가 불가"}">${result.addable ? "⭕" : "❌"}</span>
+        </div>
+      `).join("");
+      window.requestAnimationFrame(refreshPlaylistImportPreviewMarquees_);
+    }
+    if (els.playlistImportPreviewApplyButton) {
+      els.playlistImportPreviewApplyButton.disabled = !computed.validItems.length;
+    }
+  }
+
+  function updatePlaylistImportPreviewMode_() {
+    if (!els.playlistImportPreviewModal) return;
+    const checked = els.playlistImportPreviewModal.querySelector('input[name="playlistImportMode"]:checked');
+    const mode = checked ? checked.value : "new";
+    if (els.playlistImportNewName) {
+      els.playlistImportNewName.disabled = mode !== "new";
+      els.playlistImportNewName.hidden = mode !== "new";
+    }
+    if (els.playlistImportMergeSelect) {
+      els.playlistImportMergeSelect.disabled = mode !== "merge";
+      els.playlistImportMergeSelect.hidden = mode !== "merge";
+    }
+    refreshPlaylistImportPreview_();
+  }
+
+  function renderPlaylistImportPreview_(share, resolved) {
+    playlistImportPreviewState = {
+      name: share.name,
+      rawCount: share.items.length,
+      results: resolved.results,
+      validItems: resolved.validItems,
+      currentValidItems: resolved.validItems
+    };
+    if (els.playlistImportPreviewName) els.playlistImportPreviewName.textContent = share.name;
+    if (els.playlistImportNewName) els.playlistImportNewName.value = makeUniquePlaylistName_(share.name);
+    if (els.playlistImportMergeSelect) {
+      els.playlistImportMergeSelect.innerHTML = playlists.map(list => `<option value="${escapeHtml(list.id)}" ${list.id === selectedPlaylistId ? "selected" : ""}>${escapeHtml(list.name)} (${list.items.length})</option>`).join("");
+    }
+    const defaultRadio = els.playlistImportPreviewModal && els.playlistImportPreviewModal.querySelector('input[name="playlistImportMode"][value="new"]');
+    if (defaultRadio) defaultRadio.checked = true;
+    updatePlaylistImportPreviewMode_();
+    setNestedPlaylistModalOpen_(els.playlistImportPreviewModal, true);
+  }
+
+  function makeUniquePlaylistName_(name) {
+    const base = String(name || "가져온 플레이리스트").trim() || "가져온 플레이리스트";
+    if (!playlistNameExists_(base)) return base;
+    let index = 2;
+    while (playlistNameExists_(`${base} (${index})`)) index += 1;
+    return `${base} (${index})`;
+  }
+
+  async function exportSelectedPlaylist_() {
+    const selected = getSelectedPlaylist();
+    if (!selected) return;
+    try {
+      const exported = await createPlaylistShareCode_(selected);
+      if (!exported.itemCount) {
+        showLikeNoticeModal("[알림]", "공유할 수 있는 곡이 없습니다.");
+        return;
+      }
+      await writeTextToClipboard(exported.code);
+      const skippedText = exported.skippedCount ? `\n지원하지 않는 외부 영상 ${exported.skippedCount}개는 제외했습니다.` : "";
+      showLikeNoticeModal("[완료]", `‘${selected.name}’ 공유코드를 클립보드에 복사했습니다.${skippedText}`);
+    } catch (error) {
+      showLikeNoticeModal("[오류]", String(error && error.message || "공유코드를 만들지 못했습니다."));
+    }
+  }
+
+  async function validatePlaylistImportCode_() {
+    const code = String(els.playlistImportCodeInput && els.playlistImportCodeInput.value || "").trim();
+    if (!code) {
+      showLikeNoticeModal("[알림]", "공유코드를 입력해주세요.");
+      return;
+    }
+    if (els.playlistImportCodeConfirmButton) els.playlistImportCodeConfirmButton.disabled = true;
+    try {
+      const share = await parsePlaylistShareCode_(code);
+      const resolved = await resolvePlaylistShareItems_(share.items);
+      closePlaylistImportModal_();
+      renderPlaylistImportPreview_(share, resolved);
+    } catch (error) {
+      showLikeNoticeModal("[오류]", String(error && error.message || "공유코드를 확인하지 못했습니다."));
+    } finally {
+      if (els.playlistImportCodeConfirmButton) els.playlistImportCodeConfirmButton.disabled = false;
+    }
+  }
+
+  function applyPlaylistImportPreview_() {
+    if (!playlistImportPreviewState || !playlistImportImportModeValue_()) return;
+    const mode = playlistImportImportModeValue_();
+    const importItems = Array.isArray(playlistImportPreviewState.currentValidItems)
+      ? playlistImportPreviewState.currentValidItems
+      : [];
+    if (!importItems.length) return;
+
+    if (mode === "new") {
+      const name = String(els.playlistImportNewName && els.playlistImportNewName.value || "").trim();
+      if (!name) {
+        showLikeNoticeModal("[알림]", "새 플레이리스트 이름을 입력해주세요.");
+        return;
+      }
+      if (playlistNameExists_(name)) {
+        showLikeNoticeModal("[알림]", "이미 같은 이름의 플레이리스트가 있습니다.");
+        return;
+      }
+      const list = { id: makePlaylistId_(), name, items: filterUniquePlaylistItems_(importItems) };
+      playlists.push(list);
+      selectedPlaylistId = list.id;
+      savePlaylists();
+      closePlaylistImportPreviewModal_();
+      renderPlaylistManager();
+      renderPlaylistSummary();
+      refreshPlaylistAddButtonStates_();
+      showCooldownText(`플레이리스트 가져오기: ${name}`);
+      return;
+    }
+
+    const targetId = String(els.playlistImportMergeSelect && els.playlistImportMergeSelect.value || "").trim();
+    const target = playlists.find(list => list.id === targetId);
+    if (!target) {
+      showLikeNoticeModal("[알림]", "병합할 플레이리스트를 선택해주세요.");
+      return;
+    }
+    let added = 0;
+    importItems.forEach(item => {
+      if (playlistHasItem_(target, item)) return;
+      target.items.push(item);
+      added += 1;
+    });
+    selectedPlaylistId = target.id;
+    savePlaylists();
+    closePlaylistImportPreviewModal_();
+    renderPlaylistManager();
+    renderPlaylistSummary();
+    refreshPlaylistAddButtonStates_();
+    showCooldownText(`‘${target.name}’에 ${added}곡 병합`);
+  }
+
+  function playlistImportImportModeValue_() {
+    const checked = els.playlistImportPreviewModal && els.playlistImportPreviewModal.querySelector('input[name="playlistImportMode"]:checked');
+    return checked ? checked.value : "new";
+  }
+
   function bindPlaylistManagerEvents() {
+    if (els.playlistImportModal) els.playlistImportModal.hidden = true;
+    if (els.playlistImportPreviewModal) els.playlistImportPreviewModal.hidden = true;
+
     if (els.playlistOpenButton) {
       els.playlistOpenButton.addEventListener("click", openPlaylistModal);
     }
@@ -5632,6 +6197,31 @@
     if (els.playlistModalClose) {
       els.playlistModalClose.addEventListener("click", closePlaylistModal);
     }
+
+    if (els.playlistExportButton) els.playlistExportButton.addEventListener("click", exportSelectedPlaylist_);
+    if (els.playlistImportButton) els.playlistImportButton.addEventListener("click", openPlaylistImportModal_);
+    if (els.playlistImportModal) {
+      els.playlistImportModal.addEventListener("click", event => {
+        if (event.target === els.playlistImportModal) pulseModalCloseButton_(els.playlistImportModalClose);
+      });
+    }
+    if (els.playlistImportModalClose) els.playlistImportModalClose.addEventListener("click", closePlaylistImportModal_);
+    if (els.playlistImportCodeCancelButton) els.playlistImportCodeCancelButton.addEventListener("click", closePlaylistImportModal_);
+    if (els.playlistImportCodeConfirmButton) els.playlistImportCodeConfirmButton.addEventListener("click", validatePlaylistImportCode_);
+    if (els.playlistImportPreviewModal) {
+      els.playlistImportPreviewModal.addEventListener("click", event => {
+        if (event.target === els.playlistImportPreviewModal) pulseModalCloseButton_(els.playlistImportPreviewModalClose);
+      });
+      els.playlistImportPreviewModal.querySelectorAll('input[name="playlistImportMode"]').forEach(input => {
+        input.addEventListener("change", updatePlaylistImportPreviewMode_);
+      });
+    }
+    if (els.playlistImportMergeSelect) {
+      els.playlistImportMergeSelect.addEventListener("change", refreshPlaylistImportPreview_);
+    }
+    if (els.playlistImportPreviewModalClose) els.playlistImportPreviewModalClose.addEventListener("click", closePlaylistImportPreviewModal_);
+    if (els.playlistImportPreviewCancelButton) els.playlistImportPreviewCancelButton.addEventListener("click", closePlaylistImportPreviewModal_);
+    if (els.playlistImportPreviewApplyButton) els.playlistImportPreviewApplyButton.addEventListener("click", applyPlaylistImportPreview_);
 
     if (els.playlistCreateButton) {
       els.playlistCreateButton.addEventListener("click", () => {
@@ -5740,14 +6330,24 @@
     }
   }
 
+  function pulseModalCloseButton_(button) {
+    if (!button) return;
+    const previousTimer = modalCloseAttentionTimers.get(button);
+    if (previousTimer) window.clearTimeout(previousTimer);
+    button.classList.remove("modal-close-attention");
+    void button.offsetWidth;
+    button.classList.add("modal-close-attention");
+    const timer = window.setTimeout(() => {
+      button.classList.remove("modal-close-attention");
+      modalCloseAttentionTimers.delete(button);
+    }, 3000);
+    modalCloseAttentionTimers.set(button, timer);
+  }
+
   function pulseYoutubeModalCloseButton_() {
-    if (!els.youtubeModalClose) return;
-    els.youtubeModalClose.classList.remove("modal-close-attention");
-    void els.youtubeModalClose.offsetWidth;
-    els.youtubeModalClose.classList.add("modal-close-attention");
+    pulseModalCloseButton_(els.youtubeModalClose);
     if (youtubeClosePulseTimer) window.clearTimeout(youtubeClosePulseTimer);
     youtubeClosePulseTimer = window.setTimeout(() => {
-      els.youtubeModalClose && els.youtubeModalClose.classList.remove("modal-close-attention");
       youtubeClosePulseTimer = null;
     }, 3000);
   }
