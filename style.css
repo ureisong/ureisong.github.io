@@ -2839,3 +2839,55 @@ html.playlist-disabled [data-playlist-feature] {
 #playlistImportPreviewModal .playlist-import-preview-card {
   margin: auto;
 }
+
+.channel-cover-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  -webkit-line-clamp: unset;
+}
+
+.channel-title-primary {
+  width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-title-meta {
+  max-width: 100%;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.channel-custom-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-official-mark {
+  position: relative;
+  top: -1px;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+}
+
+.channel-official-mark-meta {
+  position: relative;
+  top: 1px;
+}

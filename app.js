@@ -4145,6 +4145,43 @@
     return `https://unavatar.io/youtube/${encodeURIComponent(name)}`;
   }
 
+  function parseChannelNoticeValue_(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+
+    const tags = [];
+    let rest = raw;
+    while (rest.startsWith("[")) {
+      const end = rest.indexOf("]");
+      if (end <= 0) break;
+      tags.push(rest.slice(1, end).trim());
+      rest = rest.slice(end + 1).trim();
+    }
+
+    let urlText = rest;
+    const httpsIndex = rest.indexOf("https://");
+    if (httpsIndex >= 0) {
+      urlText = rest.slice(httpsIndex).trim();
+    } else if (rest.startsWith("{") && rest.endsWith("}")) {
+      urlText = rest.slice(1, -1).trim();
+    }
+
+    if (urlText.startsWith("{")) {
+      urlText = urlText.slice(1).trim();
+    }
+    if (urlText.endsWith("}")) {
+      urlText = urlText.slice(0, -1).trim();
+    }
+
+    const official = tags.some(tag => tag === "공식");
+    const customName = tags.find(tag => tag && tag !== "공식") || "";
+    return {
+      url: urlText,
+      customName,
+      official
+    };
+  }
+
   function extractChannelItemsFromRows(rows) {
     return rows
       .filter(row => String(row.key || "").trim().toLowerCase() === "cha")
@@ -4157,13 +4194,17 @@
   }
 
   function makeChannelItem_(value, title = "", thumbnail = "") {
-    const url = normalizeYoutubeChannelUrl_(value);
+    const parsedValue = parseChannelNoticeValue_(value);
+    if (!parsedValue) return null;
+    const url = normalizeYoutubeChannelUrl_(parsedValue.url);
     if (!url) return null;
     return {
       id: url,
       url,
       title: String(title || "").trim() || getYoutubeChannelFallbackName_(url),
       hasCustomTitle: Boolean(String(title || "").trim()),
+      customName: parsedValue.customName,
+      official: parsedValue.official,
       thumbnail: String(thumbnail || "").trim() || getYoutubeChannelAvatarFallback_(url),
       hasCustomThumbnail: Boolean(String(thumbnail || "").trim()),
       enriched: false
@@ -4183,6 +4224,8 @@
       return {
         ...made,
         hasCustomTitle: typeof item.hasCustomTitle === "boolean" ? item.hasCustomTitle : Boolean(String(item && item.title || "").trim()),
+        customName: String(item && item.customName || made.customName || "").trim(),
+        official: typeof item.official === "boolean" ? item.official : Boolean(made.official),
         hasCustomThumbnail: typeof item.hasCustomThumbnail === "boolean" ? item.hasCustomThumbnail : Boolean(String(item && (item.thumbnail || item.img) || "").trim()),
         thumbnail: String(item && (item.thumbnail || item.img) || made.thumbnail || "").trim() || made.thumbnail,
         enriched: Boolean(item && item.enriched)
@@ -4925,12 +4968,23 @@
   function renderChannelCard_(item) {
     const isCenter = item._slot === 0;
     const borderStyle = getChannelBorderStyle_(item.id);
+    const hasCustomName = Boolean(item.customName);
+    const primaryOfficialHtml = item.official && !hasCustomName
+      ? `<img class="channel-official-mark" src="official.png" alt="공식" loading="lazy" />`
+      : "";
+    const metaHtml = hasCustomName
+      ? `<div class="channel-title-meta"><span class="channel-custom-name">${escapeHtml(item.customName)}</span>${item.official ? `<img class="channel-official-mark channel-official-mark-meta" src="official.png" alt="공식" loading="lazy" />` : ""}</div>`
+      : "";
+    const hasDecoratedTitle = Boolean(hasCustomName || item.official);
+    const titleHtml = hasDecoratedTitle
+      ? `<div class="cover-title channel-cover-title" data-channel-title="${escapeHtml(item.id)}"><div class="channel-title-primary">${escapeHtml(item.title)}${primaryOfficialHtml}</div>${metaHtml}</div>`
+      : `<div class="cover-title" data-channel-title="${escapeHtml(item.id)}">${escapeHtml(item.title)}</div>`;
     return `
       <a class="cover-card channel-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-channel-index="${escapeHtml(item._actualIndex)}">
         <div class="cover-thumb-wrap channel-thumb-wrap media-thumb-loading" style="${escapeHtml(borderStyle)}">
           <img class="cover-thumb channel-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src='https://www.google.com/s2/favicons?domain=youtube.com&sz=128';}else{this.parentElement.classList.remove('media-thumb-loading');this.remove();}" />
         </div>
-        <div class="cover-title" data-channel-title="${escapeHtml(item.id)}">${escapeHtml(item.title)}</div>
+        ${titleHtml}
       </a>
     `;
   }
