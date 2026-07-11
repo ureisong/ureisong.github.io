@@ -1880,25 +1880,35 @@
     return values.length ? [...new Set(values)] : [];
   }
 
-  function hasTtuddyaTitleMarker_(value) {
-    return String(value || "").includes(" [뜌땨]");
-  }
-
   function formatDisplaySongTitleText_(value) {
-    return String(value || "").replaceAll(" [뜌땨]", " 🐤");
+    return String(value || "")
+      .replaceAll(" [뜌땨]", " 🐤")
+      .replaceAll(" [불법레이]", " 🍥");
   }
 
-  function stripTtuddyaTitleMarker_(value) {
-    return String(value || "").replaceAll(" [뜌땨]", "").replaceAll(" 🐤", "").trim();
+  function stripTitleMarker_(value) {
+    return String(value || "")
+      .replaceAll(" [뜌땨]", "").replaceAll(" 🐤", "")
+      .replaceAll(" [불법레이]", "").replaceAll(" 🍥", "")
+      .trim();
   }
 
   function getSungGroupTitleText_(song) {
-    const values = getTitleValues(song).map(stripTtuddyaTitleMarker_).filter(Boolean);
-    return values.length ? values.join(" ") : stripTtuddyaTitleMarker_(getDisplayTitle(song)) || "곡명 없음";
+    const values = getTitleValues(song).map(stripTitleMarker_).filter(Boolean);
+    return values.length ? values.join(" ") : stripTitleMarker_(getDisplayTitle(song)) || "곡명 없음";
   }
 
   function getSongTitleTooltip_(song) {
-    return song && hasTtuddyaTitleMarker_(song.title) ? "뜌땨한 곡 입니다" : "";
+    if (!song) return "";
+
+    const title = String(song.title || "");
+    if (title.includes(" [뜌땨]")) {
+      return "뜌땨한 곡 입니다";
+    } else if (title.includes(" [불법레이]")) {
+      return "불법레이…🍥";
+    }
+  
+    return "";
   }
 
   function getTitleValues(song) {
