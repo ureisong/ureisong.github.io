@@ -292,11 +292,22 @@ h1 {
 
 .search-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 120px;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
   gap: 8px;
 }
 
+.search-row-actions { display: contents; }
 .search-row select { min-width: 0; }
+
+#filterApplyButton {
+  min-width: 58px;
+  padding: 0 13px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 13%, var(--card));
+  color: var(--text);
+  font-weight: 750;
+  white-space: nowrap;
+}
 
 .search-row input {
   border-color: var(--line-strong);
@@ -1474,7 +1485,15 @@ html.dark-mode .page-loading-card {
 @media (max-width: 720px) {
   .site-header { align-items: stretch; }
   .notice-marquee { animation-duration: 32s; }
-  .search-row { grid-template-columns: 1fr; }
+  .search-row { grid-template-columns: minmax(0, 1fr); }
+  .search-row-actions {
+    display: flex;
+    grid-row: 2;
+    min-width: 0;
+    gap: 8px;
+  }
+  .search-row-actions select { flex: 1 1 auto; width: 100%; min-width: 0; }
+  #filterApplyButton { flex: 0 0 auto; min-height: 40px; }
 
   .cover-carousel {
     grid-template-columns: 34px minmax(0, 1fr) 34px;

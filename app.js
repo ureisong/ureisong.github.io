@@ -37,6 +37,7 @@
   let settingsRowsPromise = null;
   let searchAliasesLoadedFromData = false;
   let searchRenderTimer = null;
+  let filterApplyPending = false;
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
@@ -135,6 +136,7 @@
     pageTitle: document.getElementById("pageTitle"),
     searchInput: document.getElementById("searchInput"),
     searchMode: document.getElementById("searchMode"),
+    filterApplyButton: document.getElementById("filterApplyButton"),
     yearFilter: document.getElementById("yearFilter"),
     monthFilter: document.getElementById("monthFilter"),
     dayFilter: document.getElementById("dayFilter"),
@@ -369,7 +371,7 @@
   let filterCloseAnimationTimer = null;
   let normalPlaybackMonitorTimer = null;
   let normalPlaybackFadeState = null;
-  let normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
+  let normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false, endPauseHandled: false };
   let normalPlaybackCloseFadePending = false;
   let suppressPageLoadingForInitialShare = false;
   let playlistImportPreviewState = null;
@@ -439,6 +441,18 @@
         applyAndRender(true);
       }, 100);
     });
+    els.searchInput.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      applyFiltersAndNavigateToDate_();
+    });
+    els.searchInput.addEventListener("search", () => applyFiltersAndNavigateToDate_());
+    if (els.filterApplyButton) {
+      els.filterApplyButton.addEventListener("click", event => {
+        event.preventDefault();
+        applyFiltersAndNavigateToDate_();
+      });
+    }
     els.searchInput.addEventListener("blur", () => els.searchInput.classList.remove("input-active"));
     els.searchInput.addEventListener("focus", () => {
       els.searchInput.classList.add("input-active");
@@ -575,12 +589,7 @@
           if (els.recommendDetails) els.recommendDetails.open = false;
           if (els.dateDetails) els.dateDetails.open = false;
 
-          window.setTimeout(() => {
-            els.sungDetails.scrollIntoView({
-              behavior: "smooth",
-              block: "start"
-            });
-          }, 80);
+          scrollElementBelowStickyHeader_(els.sungDetails, { behavior: "smooth", offset: 10 });
         }
       });
     }
@@ -2198,6 +2207,8 @@
 
   function formatDisplaySongTitleText_(value) {
     return String(value || "")
+      .replaceAll("ㅨ", "")
+      .replace(/\s{2,}/g, " ")
       .replaceAll(" [뜌땨]", " 🐤")
       .replaceAll(" [불법레이]", " 🍥");
   }
@@ -2210,8 +2221,23 @@
   }
 
   function getSungGroupTitleText_(song) {
-    const values = getTitleValues(song).map(stripTitleMarker_).filter(Boolean);
-    return values.length ? values.join(" ") : stripTitleMarker_(getDisplayTitle(song)) || "곡명 없음";
+    const values = getTitleValues(song).map(getCanonicalSungTitleText_).filter(Boolean);
+    return values.length ? values.join(" ") : getCanonicalSungTitleText_(getDisplayTitle(song)) || "곡명 없음";
+  }
+
+  function getCanonicalSungTitleText_(value) {
+    return stripTitleMarker_(String(value || "").split("ㅨ", 1)[0]).trim();
+  }
+
+  function getSearchableTitleValues_(song) {
+    return getTitleValues(song)
+      .map(value => String(value || "").split("ㅨ", 1)[0].trim())
+      .filter(Boolean);
+  }
+
+  function getSearchableDisplayTitle_(song) {
+    const values = getSearchableTitleValues_(song).map(formatDisplaySongTitleText_);
+    return values.length ? values.join(" ") : "곡명 없음";
   }
 
   function getSongTitleTooltip_(song) {
@@ -2530,22 +2556,64 @@
     });
   }
 
+  function scrollElementBelowStickyHeader_(element, options = {}) {
+    if (!element) return;
+    const header = document.querySelector(".site-header");
+    if (header && header.contains(element)) return;
+
+    const behavior = options.behavior || "smooth";
+    const offset = Math.max(0, Number(options.offset) || 0);
+    const requestedDelay = Math.max(0, Number(options.delay) || 0);
+    const filterIsMoving = Boolean(els.filterDetails && (
+      els.filterDetails.open || els.filterDetails.classList.contains("is-closing")
+    ));
+    const statusIsMoving = Boolean(els.statusBox && els.statusBox.classList.contains("is-expanded"));
+    const settleDelay = filterIsMoving || statusIsMoving ? 280 : 0;
+
+    window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        const rect = element.getBoundingClientRect();
+        const headerRect = header ? header.getBoundingClientRect() : null;
+        const stickyHeaderHeight = headerRect && headerRect.top <= 1 && headerRect.bottom > 0
+          ? headerRect.height
+          : 0;
+        const targetTop = Math.max(0, window.scrollY + rect.top - stickyHeaderHeight - offset);
+        window.scrollTo({ top: targetTop, left: 0, behavior });
+      });
+    }, Math.max(requestedDelay, settleDelay));
+  }
+
   function scrollToRecommendSection() {
     if (!els.recommendDetails) {
       scrollToPageTop();
       return;
     }
-
-    window.requestAnimationFrame(() => {
-      els.recommendDetails.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    scrollElementBelowStickyHeader_(els.recommendDetails, { behavior: "smooth", offset: 10 });
   }
 
   function scrollToFilterSection() {
     if (!els.filterDetails) return;
-    window.requestAnimationFrame(() => {
-      els.filterDetails.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    scrollElementBelowStickyHeader_(els.filterDetails, { behavior: "smooth", offset: 0 });
+  }
+
+  function applyFiltersAndNavigateToDate_() {
+    if (filterApplyPending) return;
+    filterApplyPending = true;
+
+    if (searchRenderTimer) {
+      window.clearTimeout(searchRenderTimer);
+      searchRenderTimer = null;
+    }
+
+    applyAndRender(true);
+    collapseNonDateSections();
+    setFilterDetailsOpen_(false);
+
+    window.setTimeout(() => {
+      if (els.dateDetails) els.dateDetails.open = true;
+      scrollElementBelowStickyHeader_(els.dateDetails, { behavior: "smooth", offset: 10 });
+      filterApplyPending = false;
+    }, 270);
   }
 
   function setSingleSelectValue(select, value) {
@@ -2675,6 +2743,7 @@
     const dateText = formatSongDate(song);
 
     const titleText = getDisplayTitle(song);
+    const searchableTitleText = getSearchableDisplayTitle_(song);
     const artistText = getDisplayArtist(song);
     const modalArtistText = String(song.artist || "").trim() || artistText;
 
@@ -2686,9 +2755,9 @@
       ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-end="${escapeHtml(song.end || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
       : `<span class="song-title-missing" title="${escapeHtml(titleTooltip || "다시보기가 없습니다")}">${escapeHtml(titleText)}</span>`;
 
-    const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
-    const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
-    const title = `${titleCoreHtml}<button class="inline-filter-button title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
+    const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
+    const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
+    const title = `${titleCoreHtml}<button class="inline-filter-button title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
     const titleHtml = `${titleCoreHtml}${titleFilterButton}`;
 
     const timelineHtml = song.timeline
@@ -3665,7 +3734,8 @@
       end: hasValidSongSegment ? dataEndSeconds : null,
       hasStart: hasTimelineValue || startSeconds > 0,
       hasEnd: hasEndValue,
-      hasSegment: hasValidSongSegment
+      hasSegment: hasValidSongSegment,
+      endPauseHandled: false
     };
     const token = ++youtubePlayerToken;
     youtubeIsPlaying = false;
@@ -3750,7 +3820,7 @@
     clearPlaylistVolumeFade_();
     clearPlaylistVolumeMonitor_();
     normalPlaybackFadeState = null;
-    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
+    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false, endPauseHandled: false };
     playlistPlayback = null;
     renderPlaylistPlaybackUi_();
     if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
@@ -4268,7 +4338,8 @@
 
 
   function getSearchFieldValues(song, mode) {
-    const titleValues = [getDisplayTitle(song), ...getTitleValues(song)];
+    const searchableTitleValues = getSearchableTitleValues_(song);
+    const titleValues = [...searchableTitleValues.map(formatDisplaySongTitleText_), ...searchableTitleValues];
     const artistValues = [getDisplayArtist(song), ...getArtistValues(song)];
     const dateValues = [formatPlainDate(song), formatSongDate(song), `${song.year}-${song.month}-${song.day}`];
     const idValues = [song && song.id];
@@ -8154,7 +8225,7 @@
     const repeat = els.playlistRepeatToggle ? els.playlistRepeatToggle.dataset.repeat === "1" : false;
     clearNormalPlaybackMonitor_();
     normalPlaybackFadeState = null;
-    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
+    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false, endPauseHandled: false };
     playlistPlayback = {
       active: true,
       list: playbackList,
@@ -8802,6 +8873,18 @@
       if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime) || currentTime < 0) return;
 
       updateYoutubePlaybackProgress_(currentTime, duration);
+      const segment = normalPlaybackSegment;
+      if (segment && segment.hasSegment && !segment.endPauseHandled &&
+          Number.isFinite(Number(segment.end)) && currentTime >= Number(segment.end) - 0.06) {
+        segment.endPauseHandled = true;
+        clearPlaylistVolumeFade_();
+        try {
+          if (typeof youtubePlayer.pauseVideo === "function") youtubePlayer.pauseVideo();
+        } catch (err) {
+          console.warn("일반 곡 구간 종료 시 일시정지 실패", err);
+        }
+        return;
+      }
       const remaining = duration - currentTime;
       if (state.phase === "normal") {
         const observedVolume = getPlaylistCurrentVolume_(state.targetVolume);
