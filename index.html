@@ -3,8 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>들어줄레이🍇👻</title>
+  <title>들어줄레이🍇👻 - 유레이 노래방송 아카이브</title>
+  <meta name="description" content="버츄얼 스트리머 유레이의 노래방송 다시보기를 곡명·아티스트·날짜·국가·카테고리로 검색하고, 추천순·부른순으로 모아보는 팬 아카이브입니다." />
+  <meta name="theme-color" content="#171226" />
+  <link rel="canonical" href="https://ureisong.github.io/" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="들어줄레이" />
+  <meta property="og:title" content="들어줄레이🍇👻 - 유레이 노래방송 아카이브" />
+  <meta property="og:description" content="버츄얼 스트리머 유레이의 노래방송 다시보기를 검색·필터·추천순으로 모아보는 팬 아카이브입니다." />
+  <meta property="og:image" content="https://ureisong.github.io/official.png" />
+  <meta property="og:url" content="https://ureisong.github.io/" />
+  <meta property="og:locale" content="ko_KR" />
+
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="들어줄레이🍇👻 - 유레이 노래방송 아카이브" />
+  <meta name="twitter:description" content="버츄얼 스트리머 유레이의 노래방송 다시보기를 검색·필터·추천순으로 모아보는 팬 아카이브입니다." />
+  <meta name="twitter:image" content="https://ureisong.github.io/official.png" />
+
   <link id="faviconLink" rel="icon" href="./icon.ico?v=0" />
+  <link rel="apple-touch-icon" href="./icon.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" media="print" onload="this.media='all'" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css" media="print" onload="this.media='all'" />
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css" />
+  </noscript>
+
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -14,65 +42,69 @@
       <div class="notice-viewport" aria-label="공지">
         <div id="noticeText" class="notice-marquee">`<a href="https://www.youtube.com/@Ure1replay/videos" target="_blank">다시보레이</a>` 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.</div>
       </div>
+      <div class="header-actions">
+        <button id="filterToggleButton" class="header-tool-toggle filter-tool-toggle" type="button" aria-controls="filterDetails" aria-expanded="false" aria-label="필터 펼치기" title="필터 펼치기">🔍</button>
+        <div id="statusBox" class="status-box is-collapsed">
+          <button id="statusToggleButton" class="header-tool-toggle status-toggle" type="button" aria-controls="statusBoxContent" aria-expanded="false" aria-label="상태 정보 펼치기" title="상태 정보 펼치기">⚙</button>
+          <div id="statusBoxContent" class="status-box-content">
+            <div id="dataStatus">데이터 로딩 중...</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="status-box">
-      <div id="dataStatus">데이터 로딩 중...</div>
-    </div>
+
+    <details id="filterDetails" class="filter-details header-filter-details">
+      <summary class="visually-hidden">필터</summary>
+        <section class="controls" aria-label="필터">
+          <label class="field search-field">
+            <span>검색</span>
+            <div class="search-row">
+              <input id="searchInput" type="search" placeholder="검색어 입력" autocomplete="off" />
+              <select id="searchMode" aria-label="검색 범위">
+                <option value="all" selected>전체</option>
+                <option value="title">곡명</option>
+                <option value="artist">아티스트</option>
+                <option value="date">날짜</option>
+              </select>
+            </div>
+          </label>
+
+          <div class="filter-grid">
+            <label class="field">
+              <span>년</span>
+              <select id="yearFilter"></select>
+            </label>
+
+            <label class="field">
+              <span>월</span>
+              <select id="monthFilter"></select>
+            </label>
+
+            <label class="field">
+              <span>일</span>
+              <select id="dayFilter"></select>
+            </label>
+
+            <label class="field">
+              <span>국가</span>
+              <select id="countryFilter"></select>
+            </label>
+
+            <label class="field">
+              <span>카테고리</span>
+              <select id="categoryFilter"></select>
+            </label>
+
+            <div class="buttons">
+              <button id="resetButton" type="button">필터 초기화</button>
+            </div>
+          </div>
+        </section>
+    </details>
   </header>
 
   <main class="layout">
-    <details id="filterDetails" class="filter-details">
-      <summary>
-        <span>필터</span>
-        <span class="summary-help">클릭해서 펼치기</span>
-      </summary>
 
-      <section class="controls" aria-label="필터">
-        <label class="field search-field">
-          <span>검색</span>
-          <div class="search-row">
-            <input id="searchInput" type="search" placeholder="검색어 입력" autocomplete="off" />
-            <select id="searchMode" aria-label="검색 범위">
-              <option value="all" selected>전체</option>
-              <option value="title">곡명</option>
-              <option value="artist">아티스트</option>
-              <option value="date">날짜</option>
-            </select>
-          </div>
-        </label>
-
-        <div class="filter-grid">
-          <label class="field">
-            <span>년</span>
-            <select id="yearFilter"></select>
-          </label>
-
-          <label class="field">
-            <span>월</span>
-            <select id="monthFilter"></select>
-          </label>
-
-          <label class="field">
-            <span>일</span>
-            <select id="dayFilter"></select>
-          </label>
-
-          <label class="field">
-            <span>국가</span>
-            <select id="countryFilter"></select>
-          </label>
-
-          <label class="field">
-            <span>카테고리</span>
-            <select id="categoryFilter"></select>
-          </label>
-
-          <div class="buttons">
-            <button id="resetButton" type="button">필터 초기화</button>
-          </div>
-        </div>
-      </section>
-    </details>
 
     <section class="summary">
       <div class="playlist-summary" data-playlist-feature>
@@ -97,12 +129,22 @@
 
       <section class="panel-body cover-panel">
         <div id="coverEmpty" class="empty" hidden>표시할 커버곡이 없습니다.</div>
-        <div id="coverCarousel" class="cover-carousel" hidden>
-          <button id="coverPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 커버곡">‹</button>
-          <div class="cover-window">
-            <div id="coverTrack" class="cover-track"></div>
+        <div id="coverCarousel" class="cover-carousel cover-showcase" hidden>
+          <button id="coverPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 커버곡"></button>
+          <div class="cover-window cover-showcase-window">
+            <div class="cover-showcase-layout">
+              <div id="coverTrack" class="cover-track cover-tab-list" role="tablist" aria-label="커버곡 목록"></div>
+              <a id="coverFeature" class="cover-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="cover" data-playlist-section="커버곡" data-playlist-hint="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!" title="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!">
+                <div id="coverFeatureVisual" class="cover-feature-visual">
+                  <div class="cover-feature-image-wrap">
+                    <img id="coverFeatureImage" class="cover-feature-image" src="" alt="" decoding="async" />
+                  </div>
+                  <div id="coverFeatureTitle" class="cover-title cover-feature-title" data-cover-title=""></div>
+                </div>
+              </a>
+            </div>
           </div>
-          <button id="coverNextButton" class="cover-nav cover-next" type="button" aria-label="다음 커버곡">›</button>
+          <button id="coverNextButton" class="cover-nav cover-next" type="button" aria-label="다음 커버곡"></button>
         </div>
       </section>
     </details>
@@ -182,12 +224,22 @@
 
       <section class="panel-body cover-panel rec-panel">
         <div id="recEmpty" class="empty" hidden>표시할 추천 플레이리스트가 없습니다.</div>
-        <div id="recCarousel" class="cover-carousel rec-carousel" hidden>
-          <button id="recPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 플레이리스트">‹</button>
-          <div class="cover-window">
-            <div id="recTrack" class="cover-track"></div>
+        <div id="recCarousel" class="cover-carousel cover-showcase rec-carousel" hidden>
+          <button id="recPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 플레이리스트"></button>
+          <div class="cover-window cover-showcase-window">
+            <div class="cover-showcase-layout rec-showcase-layout">
+              <div id="recTrack" class="cover-track cover-tab-list rec-tab-list" role="tablist" aria-label="추천 플레이리스트 목록"></div>
+              <a id="recFeature" class="cover-feature rec-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="rec" data-playlist-section="추천 플레이리스트" data-playlist-hint="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!" title="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!">
+                <div id="recFeatureVisual" class="cover-feature-visual">
+                  <div class="cover-feature-image-wrap">
+                    <img id="recFeatureImage" class="cover-feature-image" src="" alt="" decoding="async" />
+                  </div>
+                  <div id="recFeatureTitle" class="cover-title cover-feature-title" data-rec-feature-title=""></div>
+                </div>
+              </a>
+            </div>
           </div>
-          <button id="recNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 플레이리스트">›</button>
+          <button id="recNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 플레이리스트"></button>
         </div>
       </section>
     </details>
@@ -203,11 +255,11 @@
       <section class="panel-body cover-panel channel-panel">
         <div id="channelEmpty" class="empty" hidden>표시할 추천 채널이 없습니다.</div>
         <div id="channelCarousel" class="cover-carousel channel-carousel" hidden>
-          <button id="channelPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 채널">‹</button>
+          <button id="channelPrevButton" class="cover-nav cover-prev" type="button" aria-label="이전 추천 채널"></button>
           <div class="cover-window">
             <div id="channelTrack" class="cover-track channel-track"></div>
           </div>
-          <button id="channelNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 채널">›</button>
+          <button id="channelNextButton" class="cover-nav cover-next" type="button" aria-label="다음 추천 채널"></button>
         </div>
       </section>
     </details>
@@ -329,8 +381,7 @@
 
   <div id="pageLoading" class="page-loading" hidden>
     <div class="page-loading-card">
-      <div class="loader-box">
-        <img class="loader-image" src="./loading" alt="" onerror="this.remove(); this.parentElement.classList.add('use-default-loader');" />
+      <div class="loader-box use-default-loader">
         <div class="default-spinner" aria-hidden="true"></div>
         <div id="pageLoadingText" class="loader-text">데이터를 불러오는 중...</div>
         <div id="pageLoadingSubText" class="loader-subtext"></div>

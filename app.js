@@ -2,6 +2,22 @@
   "use strict";
 
   const CONFIG = window.APP_CONFIG || {};
+
+  // 디버그 로그: 기본은 off. 문제 추적이 필요할 때만 브라우저 콘솔에서
+  // localStorage.setItem("songs_debug", "1") 실행 후 새로고침하면 켜짐.
+  const DEBUG = Boolean(CONFIG.DEBUG) || (() => {
+    try {
+      return localStorage.getItem("songs_debug") === "1";
+    } catch (err) {
+      return false;
+    }
+  })();
+
+  function debugLog(...args) {
+    if (!DEBUG) return;
+    console.log(...args);
+  }
+
   const API_URL = CONFIG.API_URL || "";
   const COUNTER = String(CONFIG.COUNTER || "").trim();
   const DATA_URL = CONFIG.DATA_URL || "./data.json";
@@ -18,6 +34,9 @@
   const LIKE_COOLDOWN_MS = Number(CONFIG.LIKE_COOLDOWN_MS || 60000);
   let searchAliases = {};
   let currentSettingsRows = [];
+  let settingsRowsPromise = null;
+  let searchAliasesLoadedFromData = false;
+  let searchRenderTimer = null;
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
@@ -139,6 +158,10 @@
     coverEmpty: document.getElementById("coverEmpty"),
     coverCarousel: document.getElementById("coverCarousel"),
     coverTrack: document.getElementById("coverTrack"),
+    coverFeature: document.getElementById("coverFeature"),
+    coverFeatureVisual: document.getElementById("coverFeatureVisual"),
+    coverFeatureImage: document.getElementById("coverFeatureImage"),
+    coverFeatureTitle: document.getElementById("coverFeatureTitle"),
     coverPrevButton: document.getElementById("coverPrevButton"),
     coverNextButton: document.getElementById("coverNextButton"),
     recDetails: document.getElementById("recDetails"),
@@ -146,6 +169,10 @@
     recEmpty: document.getElementById("recEmpty"),
     recCarousel: document.getElementById("recCarousel"),
     recTrack: document.getElementById("recTrack"),
+    recFeature: document.getElementById("recFeature"),
+    recFeatureVisual: document.getElementById("recFeatureVisual"),
+    recFeatureImage: document.getElementById("recFeatureImage"),
+    recFeatureTitle: document.getElementById("recFeatureTitle"),
     recPrevButton: document.getElementById("recPrevButton"),
     recNextButton: document.getElementById("recNextButton"),
     channelDetails: document.getElementById("channelDetails"),
@@ -194,7 +221,11 @@
     youtubeModalClose: document.getElementById("youtubeModalClose"),
     youtubeFrameWrap: document.getElementById("youtubeFrameWrap"),
     filterDetails: document.getElementById("filterDetails"),
-    filterSummaryHelp: document.querySelector("#filterDetails .summary-help"),
+    filterToggleButton: document.getElementById("filterToggleButton"),
+    statusBox: document.getElementById("statusBox"),
+    statusToggleButton: document.getElementById("statusToggleButton"),
+    statusBoxContent: document.getElementById("statusBoxContent"),
+    filterSummaryHelp: document.getElementById("filterToggleButton"),
     faviconLink: document.getElementById("faviconLink"),
     modalSongInfoTop: document.querySelector(".modal-song-info-top"),
     modalSongTitle: document.getElementById("modalSongTitle"),
@@ -248,14 +279,29 @@
   let currentDateGroups = new Map();
   let coverItems = [];
   let coverIndex = 0;
-  let coverMoving = false;
+  let coverVirtualIndex = 0;
+  let coverDisplayIdOrder = [];
+  let coverDisplayFingerprint = "";
+  let coverTabRenderedOrder = "";
+  let coverFeatureActiveKey = "";
+  let coverFeatureAnimationTimer = null;
   let coverHover = false;
   let coverAutoTimer = null;
+  const songAccentHueById = new Map();
+  const songAccentUsedHues = new Set();
   let recItems = [];
   let recIndex = 0;
+  let recVirtualIndex = 0;
+  let recDisplayOrder = [];
+  let recDisplayFingerprint = "";
+  let recTabRenderedOrder = "";
+  let recFeatureActiveKey = "";
+  let recFeatureAnimationTimer = null;
   let recMoving = false;
   let recHover = false;
   let recAutoTimer = null;
+  const coverScrollState = { programmatic: false, programmaticTimer: null, frame: 0, settleTimer: null };
+  const recScrollState = { programmatic: false, programmaticTimer: null, frame: 0, settleTimer: null };
   let channelItems = [];
   let channelIndex = 0;
   let channelMoving = false;
@@ -320,6 +366,11 @@
   let burninShieldFullscreenTarget = null;
   let dateGroupLongPressTimer = null;
   let dateGroupLongPressPointerId = null;
+  let filterCloseAnimationTimer = null;
+  let normalPlaybackMonitorTimer = null;
+  let normalPlaybackFadeState = null;
+  let normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
+  let normalPlaybackCloseFadePending = false;
   let suppressPageLoadingForInitialShare = false;
   let playlistImportPreviewState = null;
 
@@ -353,13 +404,14 @@
     startRecAutoTimer();
     startChannelAutoTimer();
     bindResponsiveRender();
-    showPageLoading("...LOADING...", "설정 불러오는 중....");
-    currentSettingsRows = await loadSettingsRows();
-    playlistEnabled = normalizePlaylistEnabled(extractSettingsFromRows(currentSettingsRows));
-    applyPlaylistEnabledState(playlistEnabled);
-    showPageLoading("...LOADING...", "설정 불러오는 중.....");
-    await loadSearchAliases(false, currentSettingsRows);
-    await loadData(false, currentSettingsRows);
+    // 정적 JSON을 우선 읽습니다. JSON에 곡·설정·검색 별칭이 있으면 Sheets를 추가로
+    // 요청하지 않습니다. JSON이 없거나 잘못된 경우에만 CSV 대체 경로가 사용됩니다.
+    await loadData(false, null);
+    if (!searchAliasesLoadedFromData) {
+      const rows = currentSettingsRows.length ? currentSettingsRows : await loadSettingsRows();
+      currentSettingsRows = rows;
+      await loadSearchAliases(false, rows);
+    }
     suppressPageLoadingForInitialShare = false;
     if (!openedInitialFromCache) handleInitialSongIdQuery_();
   }
@@ -381,7 +433,11 @@
   function bindEvents() {
     els.searchInput.addEventListener("input", () => {
       applyFilterResultPanelState();
-      applyAndRender(true);
+      if (searchRenderTimer) window.clearTimeout(searchRenderTimer);
+      searchRenderTimer = window.setTimeout(() => {
+        searchRenderTimer = null;
+        applyAndRender(true);
+      }, 100);
     });
     els.searchInput.addEventListener("blur", () => els.searchInput.classList.remove("input-active"));
     els.searchInput.addEventListener("focus", () => {
@@ -398,6 +454,49 @@
     if (els.filterDetails) {
       els.filterDetails.addEventListener("toggle", updateFilterSummaryHelp);
     }
+    if (els.filterToggleButton) {
+      els.filterToggleButton.addEventListener("click", event => {
+        event.preventDefault();
+        const isClosing = Boolean(els.filterDetails && els.filterDetails.classList.contains("is-closing"));
+        setFilterDetailsOpen_(isClosing || !Boolean(els.filterDetails && els.filterDetails.open));
+      });
+    }
+    if (els.statusToggleButton) {
+      els.statusToggleButton.addEventListener("click", event => {
+        event.preventDefault();
+        setStatusBoxExpanded_(!(els.statusBox && els.statusBox.classList.contains("is-expanded")));
+      });
+    }
+    window.addEventListener("resize", () => {
+      if (els.statusBox && els.statusBox.classList.contains("is-expanded")) {
+        window.requestAnimationFrame(fitStatusBoxToHeader_);
+      }
+    }, { passive: true });
+    document.addEventListener("click", event => {
+      const target = event.target;
+      // Collapse after the clicked control handles its own action so the header's animated resize cannot cancel it.
+      window.setTimeout(() => {
+        if (els.filterDetails && els.filterDetails.open &&
+            !els.filterDetails.contains(target) &&
+            !(els.filterToggleButton && els.filterToggleButton.contains(target))) {
+          setFilterDetailsOpen_(false);
+        }
+        if (els.statusBox && els.statusBox.classList.contains("is-expanded") &&
+            !els.statusBox.contains(target)) {
+          setStatusBoxExpanded_(false);
+        }
+      }, 0);
+    }, true);
+    const collapseHeaderPanelsOnOutsideGesture_ = event => {
+      if (els.filterDetails && els.filterDetails.open && !els.filterDetails.contains(event.target)) {
+        setFilterDetailsOpen_(false);
+      }
+      if (els.statusBox && els.statusBox.classList.contains("is-expanded") && !els.statusBox.contains(event.target)) {
+        setStatusBoxExpanded_(false);
+      }
+    };
+    document.addEventListener("wheel", collapseHeaderPanelsOnOutsideGesture_, { passive: true, capture: true });
+    document.addEventListener("touchmove", collapseHeaderPanelsOnOutsideGesture_, { passive: true, capture: true });
     els.yearFilter.addEventListener("change", event => handleAllOption(event.currentTarget));
     els.monthFilter.addEventListener("change", event => handleAllOption(event.currentTarget));
     els.dayFilter.addEventListener("change", event => handleAllOption(event.currentTarget));
@@ -472,7 +571,7 @@
     if (els.sungDetails) {
       els.sungDetails.addEventListener("toggle", () => {
         if (els.sungDetails.open) {
-          if (els.filterDetails) els.filterDetails.open = false;
+          setFilterDetailsOpen_(false);
           if (els.recommendDetails) els.recommendDetails.open = false;
           if (els.dateDetails) els.dateDetails.open = false;
 
@@ -488,19 +587,95 @@
 
     if (els.coverDetails) {
       els.coverDetails.addEventListener("toggle", () => {
-        if (els.coverDetails.open) renderCoverSection();
+        if (els.coverDetails.open) {
+          renderCoverSection();
+          return;
+        }
+
+        clearCoverAutoTimer_();
+        coverHover = false;
+        const displayItems = getCoverDisplayItems_();
+        if (displayItems.length) {
+          coverIndex = 0;
+          coverVirtualIndex = displayItems.length * 2;
+          updateCoverShowcase_(displayItems, false, { centerTab: false });
+        }
       });
     }
 
     if (els.coverCarousel) {
-      els.coverCarousel.addEventListener("mouseenter", () => { coverHover = true; });
-      els.coverCarousel.addEventListener("mouseleave", () => { coverHover = false; });
-      els.coverCarousel.addEventListener("touchstart", () => { coverHover = true; }, { passive: true });
-      els.coverCarousel.addEventListener("touchend", () => {
-        window.setTimeout(() => { coverHover = false; }, 1200);
+      els.coverCarousel.addEventListener("mouseenter", () => {
+        coverHover = true;
+        clearCoverAutoTimer_();
+      });
+      els.coverCarousel.addEventListener("mouseleave", () => {
+        coverHover = false;
+        resetCoverAutoTimer();
+      });
+      els.coverCarousel.addEventListener("click", () => resetCoverAutoTimer());
+      els.coverCarousel.addEventListener("touchstart", () => {
+        coverHover = true;
+        clearCoverAutoTimer_();
       }, { passive: true });
-      bindCarouselSwipe(els.coverCarousel, direction => moveCoverCarousel(direction));
+      els.coverCarousel.addEventListener("touchend", () => {
+        window.setTimeout(() => {
+          coverHover = false;
+          resetCoverAutoTimer();
+        }, 500);
+      }, { passive: true });
+      els.coverCarousel.addEventListener("touchcancel", () => {
+        coverHover = false;
+        resetCoverAutoTimer();
+      }, { passive: true });
+      els.coverCarousel.addEventListener("focusin", () => {
+        coverHover = true;
+        clearCoverAutoTimer_();
+      });
+      els.coverCarousel.addEventListener("focusout", event => {
+        if (event.relatedTarget && els.coverCarousel.contains(event.relatedTarget)) return;
+        coverHover = false;
+        resetCoverAutoTimer();
+      });
     }
+
+    if (els.coverTrack) {
+      els.coverTrack.addEventListener("click", event => {
+        const tab = event.target && event.target.closest ? event.target.closest("[data-cover-tab-index]") : null;
+        if (!tab || !els.coverTrack.contains(tab)) return;
+        const nextIndex = Number(tab.dataset.coverTabIndex);
+        const nextVirtualIndex = Number(tab.dataset.coverVirtualIndex);
+        const displayItems = getCoverDisplayItems_();
+        if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= displayItems.length) return;
+        coverIndex = nextIndex;
+        coverVirtualIndex = Number.isInteger(nextVirtualIndex) ? nextVirtualIndex : displayItems.length * 2 + nextIndex;
+        normalizeShowcaseVirtualIndex_("cover", els.coverTrack, displayItems.length);
+        renderCoverSection(true);
+        resetCoverAutoTimer();
+      });
+      els.coverTrack.addEventListener("keydown", event => {
+        if (!event.target || !event.target.matches || !event.target.matches("[data-cover-tab-index]")) return;
+        const displayItems = getCoverDisplayItems_();
+        if (!displayItems.length) return;
+        let nextVirtualIndex = Number(event.target.dataset.coverVirtualIndex);
+        if (!Number.isInteger(nextVirtualIndex)) nextVirtualIndex = coverVirtualIndex;
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") nextVirtualIndex += 1;
+        else if (event.key === "ArrowUp" || event.key === "ArrowLeft") nextVirtualIndex -= 1;
+        else if (event.key === "Home") nextVirtualIndex = Math.floor(nextVirtualIndex / displayItems.length) * displayItems.length;
+        else if (event.key === "End") nextVirtualIndex = Math.floor(nextVirtualIndex / displayItems.length) * displayItems.length + displayItems.length - 1;
+        else return;
+        event.preventDefault();
+        coverVirtualIndex = nextVirtualIndex;
+        normalizeShowcaseVirtualIndex_("cover", els.coverTrack, displayItems.length);
+        coverIndex = wrapIndex(coverVirtualIndex, displayItems.length);
+        renderCoverSection(true);
+        const selected = els.coverTrack.querySelector(`[data-cover-virtual-index="${coverVirtualIndex}"]`);
+        if (selected) selected.focus();
+        resetCoverAutoTimer();
+      });
+      bindShowcaseScroll_(els.coverTrack, "cover");
+    }
+
+    if (els.coverFeature) bindCarouselPlaylistAddCards_(els.coverFeature, "cover");
 
     if (els.coverPrevButton) {
       els.coverPrevButton.addEventListener("click", () => moveCoverCarousel(-1));
@@ -517,13 +692,97 @@
     }
 
     if (els.recCarousel) {
-      els.recCarousel.addEventListener("mouseenter", () => { recHover = true; });
-      els.recCarousel.addEventListener("mouseleave", () => { recHover = false; });
-      els.recCarousel.addEventListener("touchstart", () => { recHover = true; }, { passive: true });
-      els.recCarousel.addEventListener("touchend", () => {
-        window.setTimeout(() => { recHover = false; }, 1200);
+      els.recCarousel.addEventListener("mouseenter", () => {
+        recHover = true;
+        clearRecAutoTimer_();
+      });
+      els.recCarousel.addEventListener("mouseleave", () => {
+        recHover = false;
+        resetRecAutoTimer();
+      });
+      els.recCarousel.addEventListener("click", () => resetRecAutoTimer());
+      els.recCarousel.addEventListener("touchstart", () => {
+        recHover = true;
+        clearRecAutoTimer_();
       }, { passive: true });
+      els.recCarousel.addEventListener("touchend", () => {
+        window.setTimeout(() => {
+          recHover = false;
+          resetRecAutoTimer();
+        }, 500);
+      }, { passive: true });
+      els.recCarousel.addEventListener("touchcancel", () => {
+        recHover = false;
+        resetRecAutoTimer();
+      }, { passive: true });
+      els.recCarousel.addEventListener("focusin", () => {
+        recHover = true;
+        clearRecAutoTimer_();
+      });
+      els.recCarousel.addEventListener("focusout", event => {
+        if (event.relatedTarget && els.recCarousel.contains(event.relatedTarget)) return;
+        recHover = false;
+        resetRecAutoTimer();
+      });
       bindCarouselSwipe(els.recCarousel, direction => moveRecCarousel(direction));
+    }
+
+    if (els.recTrack) {
+      els.recTrack.addEventListener("click", event => {
+        const tab = event.target && event.target.closest ? event.target.closest("[data-rec-tab-index]") : null;
+        if (!tab || !els.recTrack.contains(tab)) return;
+        const nextIndex = Number(tab.dataset.recTabIndex);
+        const nextVirtualIndex = Number(tab.dataset.recVirtualIndex);
+        const displayItems = getRecDisplayItems_();
+        if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= displayItems.length) return;
+        recIndex = nextIndex;
+        recVirtualIndex = Number.isInteger(nextVirtualIndex) ? nextVirtualIndex : displayItems.length * 2 + nextIndex;
+        normalizeShowcaseVirtualIndex_("rec", els.recTrack, displayItems.length);
+        renderRecSection(true);
+        resetRecAutoTimer();
+      });
+      els.recTrack.addEventListener("keydown", event => {
+        if (!event.target || !event.target.matches || !event.target.matches("[data-rec-tab-index]")) return;
+        const displayItems = getRecDisplayItems_();
+        if (!displayItems.length) return;
+        let nextVirtualIndex = Number(event.target.dataset.recVirtualIndex);
+        if (!Number.isInteger(nextVirtualIndex)) nextVirtualIndex = recVirtualIndex;
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") nextVirtualIndex += 1;
+        else if (event.key === "ArrowUp" || event.key === "ArrowLeft") nextVirtualIndex -= 1;
+        else if (event.key === "Home") nextVirtualIndex = Math.floor(nextVirtualIndex / displayItems.length) * displayItems.length;
+        else if (event.key === "End") nextVirtualIndex = Math.floor(nextVirtualIndex / displayItems.length) * displayItems.length + displayItems.length - 1;
+        else return;
+        event.preventDefault();
+        recVirtualIndex = nextVirtualIndex;
+        normalizeShowcaseVirtualIndex_("rec", els.recTrack, displayItems.length);
+        recIndex = wrapIndex(recVirtualIndex, displayItems.length);
+        renderRecSection(true);
+        const selected = els.recTrack.querySelector(`[data-rec-virtual-index="${recVirtualIndex}"]`);
+        if (selected) selected.focus();
+        resetRecAutoTimer();
+      });
+      bindShowcaseScroll_(els.recTrack, "rec");
+    }
+
+    if (els.recFeature) {
+      els.recFeature.addEventListener("click", event => {
+        const index = Number(els.recFeature.dataset.recIndex);
+        const item = Number.isInteger(index) ? recItems[index] : null;
+        if (item && item.type === "id_list") {
+          event.preventDefault();
+          void addRecommendedIdsToCurrentPlaylist_(item);
+        }
+        resetRecAutoTimer();
+      });
+      els.recFeature.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const index = Number(els.recFeature.dataset.recIndex);
+        const item = Number.isInteger(index) ? recItems[index] : null;
+        if (!item || item.type !== "id_list") return;
+        event.preventDefault();
+        void addRecommendedIdsToCurrentPlaylist_(item);
+      });
+      bindCarouselPlaylistAddCards_(els.recFeature, "rec");
     }
 
     if (els.recPrevButton) {
@@ -618,6 +877,14 @@
 
     document.addEventListener("keydown", event => {
       const key = event.key;
+      const targetInsideFilter = Boolean(els.filterDetails && els.filterDetails.contains(event.target));
+      const targetInsideStatus = Boolean(els.statusBox && els.statusBox.contains(event.target));
+      if (els.filterDetails && els.filterDetails.open && !targetInsideFilter && key !== "Tab" && String(key).toLowerCase() !== "f") {
+        setFilterDetailsOpen_(false);
+      }
+      if (els.statusBox && els.statusBox.classList.contains("is-expanded") && !targetInsideStatus && key !== "Tab") {
+        setStatusBoxExpanded_(false);
+      }
 
       if (key === "Escape") {
         if (!els.youtubeModal.hidden) closeYoutubeModal();
@@ -631,7 +898,7 @@
       if (key && key.toLowerCase() === "f" && !isEditableTarget(event.target) && els.youtubeModal.hidden) {
         event.preventDefault();
         collapseCoverSection();
-        if (els.filterDetails) els.filterDetails.open = true;
+        setFilterDetailsOpen_(true);
         window.setTimeout(() => {
           els.searchInput.focus();
           els.searchInput.select();
@@ -739,16 +1006,22 @@
       .trim();
   }
 
-  async function loadSettingsRows() {
-    if (!SETTINGS_CSV_URL) return [];
+  function loadSettingsRows() {
+    if (!SETTINGS_CSV_URL) return Promise.resolve([]);
+    if (settingsRowsPromise) return settingsRowsPromise;
 
-    try {
-      const text = await fetchText(SETTINGS_CSV_URL, true);
-      return parseCsv(text);
-    } catch (err) {
-      console.warn("[settings 로딩 실패]", err);
-      return [];
-    }
+    settingsRowsPromise = (async () => {
+      try {
+        const text = await fetchText(SETTINGS_CSV_URL, false);
+        const rows = parseCsv(text);
+        if (!rows.length) throw new Error("설정 CSV가 비어 있습니다.");
+        return rows;
+      } catch (err) {
+        console.warn("[settings 로딩 실패]", err);
+        return [];
+      }
+    })();
+    return settingsRowsPromise;
   }
 
   function getSettingValue(rows, keyName) {
@@ -765,7 +1038,7 @@
       return cached.rows || [];
     }
 
-    const text = await fetchText(url, true);
+    const text = await fetchText(url, forceNetwork);
     const rows = parseCsv(text);
     writeVersionedCsvCache(cacheName, rows, normalizedVersion || String(Date.now()));
     return rows;
@@ -800,14 +1073,22 @@
   }
 
   async function loadData(forceNetwork = false, settingsRows = null) {
-    showPageLoading("...LOADING...", forceNetwork ? "노래들을 새로 불러오고 있어요!" : "노래들을 불러오고 있어요!");
-    setStatus("데이터 로딩 중...");
+    const cachedAtStart = !forceNetwork ? readLocalJsonCache() : null;
+    const cachedSongsAtStart = cachedAtStart && (Array.isArray(cachedAtStart.data) ? cachedAtStart.data : Array.isArray(cachedAtStart) ? cachedAtStart : []);
+    const hasUsableLocalCache = Array.isArray(cachedSongsAtStart) && cachedSongsAtStart.length > 0;
+    if (!hasUsableLocalCache) {
+      showPageLoading("...LOADING...", forceNetwork ? "노래들을 새로 불러오고 있어요!" : "노래들을 불러오고 있어요!");
+    }
+    setStatus(hasUsableLocalCache ? "저장된 데이터 표시 중…" : "데이터 로딩 중...");
 
     try {
       if (!forceNetwork) {
-        const cached = readLocalJsonCache();
-        if (cached) {
+        const cached = cachedAtStart;
+        if (cached && hasUsableLocalCache) {
           allSongs = normalizeSongs(cached.data || cached);
+          if (cached.searchAliases && typeof cached.searchAliases === "object") {
+            searchAliases = normalizeSearchAliasesObject(cached.searchAliases);
+          }
           currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
           applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
@@ -827,10 +1108,16 @@
           buildFilters(allSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+          // 캐시가 있으면 최신 데이터 갱신을 기다리지 않고 바로 사용할 수 있게 합니다.
+          hidePageLoading();
         }
       }
 
       const payload = await fetchSongsPayload(forceNetwork, settingsRows);
+      if (payload.searchAliases && typeof payload.searchAliases === "object") {
+        searchAliases = normalizeSearchAliasesObject(payload.searchAliases);
+        searchAliasesLoadedFromData = true;
+      }
       allSongs = normalizeSongs(payload.data || payload || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
@@ -839,7 +1126,8 @@
       recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
       channelItems = normalizeChannelItems(payload.channels || []);
       hydrateStoredCoverPlaylistEntries_();
-      await resolvePendingStoredCoverPlaylistEntries_();
+      // 외부 YouTube 제목 조회는 초기 데이터 표시를 막지 않도록 백그라운드에서 처리합니다.
+      void resolvePendingStoredCoverPlaylistEntries_();
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
       applyPlaylistEnabledState(playlistEnabled);
@@ -858,18 +1146,21 @@
         covers: coverItems,
         recs: recItems,
         channels: channelItems,
+        searchAliases,
         settings: { like_post_enabled: likePostEnabled, playlist_enabled: playlistEnabled ? "TRUE" : "FALSE" },
         saved_at: Date.now()
       });
 
       buildFilters(allSongs);
       applyAndRender(true);
-      setStatus(`${formatStatusDate(new Date())} · ${allSongs.length}`);
+      const dataUpdatedAt = payload.generated_at ? new Date(payload.generated_at) : new Date();
+      setStatus(`${formatStatusDate(dataUpdatedAt)} · ${allSongs.length}`);
     } catch (err) {
       console.error("[데이터 로딩 실패]", err);
       const cached = readLocalJsonCache();
-      if (cached) {
-        allSongs = normalizeSongs(cached.data || cached);
+      const cachedSongs = cached && (Array.isArray(cached.data) ? cached.data : Array.isArray(cached) ? cached : []);
+      if (Array.isArray(cachedSongs) && cachedSongs.length) {
+        allSongs = normalizeSongs(cachedSongs);
         currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
         currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
         applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
@@ -905,10 +1196,50 @@
   }
 
   async function fetchSongsPayload(forceNetwork, settingsRows = null) {
-    if (SONGS_CSV_URL && LIKES_SMR_CSV_URL) {
-      const effectiveSettingsRows = settingsRows || currentSettingsRows || await loadSettingsRows();
-      currentSettingsRows = effectiveSettingsRows;
+    let jsonError = null;
 
+    // 1) GitHub Pages의 정적 JSON을 우선 사용합니다. 매 방문마다 Sheets CSV 여러 개를
+    // 순차적으로 기다리지 않게 하며, 브라우저 캐시도 활용합니다.
+    if (DATA_URL) {
+      try {
+        const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "default" });
+        if (!res.ok) throw new Error(`data.json 응답 오류: ${res.status}`);
+        const json = await res.json();
+        const data = Array.isArray(json) ? json : json && json.data;
+        if (!Array.isArray(data) || data.length === 0) {
+          throw new Error("data.json에 사용할 수 있는 곡 데이터가 없습니다.");
+        }
+        if (data.some(row => !row || !String(row.id || "").trim())) {
+          throw new Error("data.json에 유효하지 않은 곡 데이터가 포함되어 있습니다.");
+        }
+        return {
+          data,
+          notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
+          covers: Array.isArray(json) ? [] : (json.covers || []),
+          recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
+          channels: Array.isArray(json) ? [] : (json.channels || []),
+          footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
+          title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
+          h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
+          h1Visible: Array.isArray(json) ? true : (json.h1Visible !== false),
+          settings: Array.isArray(json) ? null : (json.settings || null),
+          searchAliases: Array.isArray(json) ? null : (json.searchAliases || null),
+          generated_at: Array.isArray(json) ? "" : (json.generated_at || "")
+        };
+      } catch (err) {
+        jsonError = err;
+        debugLog("[data.json 사용 불가, CSV 대체 경로 확인]", err);
+      }
+    }
+
+    // 2) JSON이 없거나 비어 있으면 기존 CSV를 사용합니다. CSV 요청은 병렬 실행합니다.
+    if (SONGS_CSV_URL && LIKES_SMR_CSV_URL) {
+      const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
+        ? settingsRows
+        : (Array.isArray(currentSettingsRows) && currentSettingsRows.length)
+          ? currentSettingsRows
+          : await loadSettingsRows();
+      currentSettingsRows = effectiveSettingsRows;
       const songsVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS);
 
       const tasks = [
@@ -920,7 +1251,6 @@
         }),
         fetchText(LIKES_SMR_CSV_URL, forceNetwork).then(parseCsv)
       ];
-
       if (NOTICE_CSV_URL) {
         tasks.push(fetchText(NOTICE_CSV_URL, forceNetwork).then(parseCsv).catch(err => {
           console.warn("[notice CSV 로딩 실패]", err);
@@ -931,6 +1261,8 @@
       }
 
       const [songsRows, likesRows, noticeRows = []] = await Promise.all(tasks);
+      const merged = mergeSongsAndLikes(songsRows, likesRows);
+      if (!merged.length) throw new Error("CSV에 사용할 수 있는 곡 데이터가 없습니다.");
       const notices = extractNoticeItemsFromRows(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
       const recs = extractRecItemsFromRows(noticeRows);
@@ -938,9 +1270,8 @@
       const footerText = extractFooterTextFromRows(noticeRows);
       const pageMeta = extractPageMetaFromRows(noticeRows);
       const settings = extractSettingsFromRows(effectiveSettingsRows);
-
       return {
-        data: mergeSongsAndLikes(songsRows, likesRows),
+        data: merged,
         notices,
         covers,
         recs,
@@ -953,28 +1284,12 @@
       };
     }
 
-    const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "no-cache" });
-    if (!res.ok) throw new Error(`data.json 응답 오류: ${res.status}`);
-
-    const json = await res.json();
-    const data = Array.isArray(json) ? json : json.data;
-    if (!Array.isArray(data)) throw new Error("data.json 형식 오류: 배열이 아닙니다.");
-    return {
-      data,
-      notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
-      covers: Array.isArray(json) ? [] : (json.covers || []),
-      recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
-      channels: Array.isArray(json) ? [] : (json.channels || []),
-      footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
-      title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
-      h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
-      h1Visible: Array.isArray(json) ? true : (json.h1Visible !== false),
-      settings: Array.isArray(json) ? null : (json.settings || null)
-    };
+    if (jsonError) throw jsonError;
+    throw new Error("데이터 공급원이 설정되지 않았습니다.");
   }
 
   async function fetchText(url, forceNetwork) {
-    const res = await fetch(url, { cache: forceNetwork ? "reload" : "no-cache" });
+    const res = await fetch(url, { cache: forceNetwork ? "reload" : "default" });
     if (!res.ok) throw new Error(`CSV 응답 오류: ${res.status}`);
     return await res.text();
   }
@@ -1140,7 +1455,7 @@
           categoryValues: splitMultiValue(item.category),
           countryValues: splitMultiValue(item.country),
           timeline: String(item.timeline || ""),
-          link: String(item.link || ""),
+          link: normalizeYoutubeVideoUrl_(item.link),
           end: normalizeSongEndValue_(item.timeline, item.end),
           sub1: String(item.sub1 || ""),
           sub2: String(item.sub2 || ""),
@@ -1173,6 +1488,7 @@
   }
 
   function applyAndRender(resetVisible, options = {}) {
+    updateFilterToggleButtonState_();
     const shouldUpdatePanelState = options.updatePanelState === true;
 
     if (resetVisible) {
@@ -1397,7 +1713,7 @@
 
     try {
       await writeTextToClipboard(text);
-      console.log(`👉 ${dateText} 의 곡 정보를 복사 성공 했습니다`);
+      debugLog(`👉 ${dateText} 의 곡 정보를 복사 성공 했습니다`);
     } catch (err) {
       console.warn(`👉 ${dateText} 의 곡 정보를 복사 실패 했습니다`, err);
     }
@@ -1604,7 +1920,7 @@
     closeYoutubeModal();
     resetFilters();
     applyFilterResultPanelState();
-    if (els.filterDetails) els.filterDetails.open = true;
+    setFilterDetailsOpen_(true);
     if (els.searchInput) els.searchInput.value = value;
     if (els.searchMode) els.searchMode.value = type === "artist" ? "artist" : "title";
     applyAndRender(true);
@@ -1991,6 +2307,7 @@
           artist: button.dataset.songArtist || "",
           date: button.dataset.songDate || "",
           timeline: button.dataset.songTimeline || "",
+          end: button.dataset.songEnd || "",
           id: button.dataset.songId || ""
         });
       });
@@ -2027,14 +2344,14 @@
   function bindDateGroupToggles(root, namespace) {
     root.querySelectorAll("[data-date-group-toggle]").forEach(button => {
       const countEl = button.querySelector(".date-group-count");
-      if (countEl && namespace === "date") {
+      if (countEl && (namespace === "date" || namespace === "sung")) {
         countEl.setAttribute("role", "button");
         countEl.setAttribute("tabindex", "0");
         countEl.title = "이 그룹의 곡을 플레이리스트에 추가";
         const addGroup = event => {
           event.preventDefault();
           event.stopPropagation();
-          addDateGroupToPlaylist_(button.dataset.dateGroupToggle || "");
+          addDateGroupToPlaylist_(button.dataset.dateGroupToggle || "", namespace);
         };
         countEl.addEventListener("click", addGroup);
         countEl.addEventListener("keydown", event => {
@@ -2084,10 +2401,10 @@
     });
   }
 
-  function addDateGroupToPlaylist_(key) {
+  function addDateGroupToPlaylist_(key, namespace = "date") {
     if (!playlistEnabled) return;
 
-    const group = currentDateGroups.get(key);
+    const group = namespace === "sung" ? currentSungGroups.get(key) : currentDateGroups.get(key);
     if (!group || !Array.isArray(group.items) || !group.items.length) return;
 
     const selected = getSelectedPlaylist();
@@ -2129,7 +2446,7 @@
 
     resetFilters();
     applyFilterResultPanelState();
-    if (els.filterDetails) els.filterDetails.open = true;
+    setFilterDetailsOpen_(true);
 
     if (type === "search" || type === "artist") {
       els.searchInput.value = value;
@@ -2163,7 +2480,23 @@
     if (els.dateDetails) els.dateDetails.open = true;
   }
 
+  function updateFilterToggleButtonState_() {
+    if (!els.filterToggleButton) return;
+
+    const hasSearch = Boolean(String(els.searchInput && els.searchInput.value || "").trim());
+    const hasSelectedFilters = [
+      els.yearFilter,
+      els.monthFilter,
+      els.dayFilter,
+      els.countryFilter,
+      els.categoryFilter
+    ].some(select => getFilterValues(select).length > 0);
+
+    els.filterToggleButton.classList.toggle("has-active-filter", hasSearch || hasSelectedFilters);
+  }
+
   function applyFilterResultPanelState() {
+    updateFilterToggleButtonState_();
     collapseNonDateSections();
   }
 
@@ -2177,7 +2510,7 @@
     setActiveModeButton("data-recommend-mode", recommendMode);
     setActiveModeButton("data-date-sort", dateSortMode);
 
-    if (els.filterDetails) els.filterDetails.open = false;
+    setFilterDetailsOpen_(false);
     if (els.recommendDetails) els.recommendDetails.open = true;
     if (els.dateDetails) els.dateDetails.open = true;
     if (els.sungDetails) els.sungDetails.open = false;
@@ -2314,15 +2647,31 @@
 
     return subs
       .map(item => {
-        const url = String(song[item.key] || "").trim();
+        const url = sanitizeExternalUrl_(song[item.key]);
         if (!url) return "";
         return `<a class="badge badge-link sub-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${item.label}">${item.label}</a>`;
       })
       .join("");
   }
 
+  function getSongAccentHue_(songId) {
+    const key = String(songId || "");
+    if (!songAccentHueById.has(key)) {
+      // 라벤더·보라·핑크 계열 안에서 선택해 사이트 톤을 유지하고,
+      // 현재 세션에서는 가능한 한 서로 다른 색상을 배정한다.
+      const palette = Array.from({ length: 69 }, (_, index) => 260 + index);
+      const unused = palette.filter(hue => !songAccentUsedHues.has(hue));
+      const candidates = unused.length ? unused : palette;
+      const hue = candidates[Math.floor(Math.random() * candidates.length)];
+      songAccentHueById.set(key, hue);
+      songAccentUsedHues.add(hue);
+    }
+    return songAccentHueById.get(key);
+  }
+
   function renderSongCard(song) {
     const liked = isLocallyLiked(song.id);
+    const accentHue = getSongAccentHue_(song.id);
     const dateText = formatSongDate(song);
 
     const titleText = getDisplayTitle(song);
@@ -2334,7 +2683,7 @@
     const titleTooltip = getSongTitleTooltip_(song);
     const titleAttr = titleTooltip ? ` title="${escapeHtml(titleTooltip)}"` : "";
     const titleCoreHtml = song.link
-      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
+      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-end="${escapeHtml(song.end || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
       : `<span class="song-title-missing" title="${escapeHtml(titleTooltip || "다시보기가 없습니다")}">${escapeHtml(titleText)}</span>`;
 
     const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(titleText)}">ⓕ</button>`;
@@ -2357,7 +2706,7 @@
     const playlistButtonHtml = renderPlaylistAddButton(song);
 
     return `
-      <article class="song-card" data-id="${escapeHtml(song.id)}">
+      <article class="song-card" data-id="${escapeHtml(song.id)}" style="--song-accent-hue:${accentHue};">
         <div>
           <h3 class="song-title ${song.link ? "song-title-clickable" : ""}">${titleHtml}</h3>
           <div class="meta">
@@ -2385,13 +2734,13 @@
     addLikeClickFeedback(button);
 
     if (!likePostEnabled) {
-      console.log(`[❌] ${label} · like_post_disabled-front`);
+      debugLog(`[❌] ${label} · like_post_disabled-front`);
       showLikeDisabledModal();
       return;
     }
 
     if (isLocallyLiked(id)) {
-      console.log(`[❌] ${label} · duplicate-local`);
+      debugLog(`[❌] ${label} · duplicate-local`);
       showCooldownText("이미 추천한 항목입니다.");
       return;
     }
@@ -2399,15 +2748,15 @@
     const remain = getLikeCooldownRemainingMs();
     if (remain > 0) {
       const remainSec = Math.ceil(remain / 1000);
-      console.log(`[❌] ${label} · cooldown-local ${remainSec}s`);
+      debugLog(`[❌] ${label} · cooldown-local ${remainSec}s`);
       showCooldownText(`${remainSec}초 후 다시 누를 수 있습니다.`);
       showLikeNoticeModal("[알림]", `${remainSec}초 후 가능합니다`);
       return;
     }
 
     if (!API_URL || API_URL.includes("PASTE_APPS_SCRIPT")) {
-      console.log(`[❌] ${label} · API_URL 미설정`);
-      showCooldownText("config.js에 Apps Script API_URL을 입력해야 합니다.");
+      debugLog(`[❌] ${label} · API_URL 미설정`);
+      showCooldownText("추천 기능을 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
       return;
     }
 
@@ -2438,13 +2787,13 @@
       }
 
       if (!res.ok) {
-        console.log(`[❌] ${label} · HTTP ${res.status}`);
-        showCooldownText(`추천 실패: HTTP ${res.status}`);
+        debugLog(`[❌] ${label} · HTTP ${res.status}`);
+        showCooldownText("추천 요청에 실패했습니다. 잠시 후 다시 시도해주세요.");
         return;
       }
 
       if (json.ok) {
-        console.log(`[⭕] ${label}`);
+        debugLog(`[⭕] ${label}`);
         markLocalLiked(id);
         setLikeCooldown();
         boostSongLocally(id);
@@ -2454,7 +2803,7 @@
         return;
       }
 
-      console.log(`[❌] ${label} · ${json.reason || "unknown"}`, json);
+      debugLog(`[❌] ${label} · ${json.reason || "unknown"}`, json);
 
       if (json.reason === "duplicate") {
         markLocalLiked(id);
@@ -2471,9 +2820,13 @@
         return;
       }
 
-      showCooldownText(`추천 실패: ${json.reason || "unknown"}`);
+      if (json.reason === "like_post_disabled") {
+        showCooldownText("현재 추천 기능을 사용할 수 없습니다.");
+      } else {
+        showCooldownText("추천 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.");
+      }
     } catch (err) {
-      console.error(`[❌] ${label} · 요청 예외`, err);
+      debugLog(`[❌] ${label} · 요청 예외`, err);
       showCooldownText("추천 요청 실패");
     } finally {
       stopLikeWaitingFeedback(button, waitingTimer);
@@ -2583,6 +2936,7 @@
         artist: String(song.artist || "").trim() || getDisplayArtist(song),
         date: formatSongDate(song),
         timeline: song.timeline || "",
+        end: song.end || "",
         id: song.id
       }, { fromShareLink: true, forceNormalModal: true, shareAutoplayWait: true });
     }, 0);
@@ -2615,6 +2969,7 @@
         artist: String(song.artist || "").trim() || getDisplayArtist(song),
         date: formatSongDate(song),
         timeline: song.timeline || "",
+        end: song.end || "",
         id: song.id
       }, { fromShareLink: true, forceNormalModal: true, shareAutoplayWait: true });
     }, 120);
@@ -2776,8 +3131,8 @@
   }
 
   function makeTimelineLink(link, timeline) {
-    const base = String(link || "").trim();
-    if (!base) return "#";
+    const base = normalizeYoutubeVideoUrl_(link);
+    if (!base) return "";
 
     if (hasYoutubeTimeParam(base)) return base;
 
@@ -2877,6 +3232,42 @@
       const distance = Math.ceil(inner.scrollWidth - el.clientWidth);
       if (distance <= 2) return;
 
+      const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+      const totalSeconds = 4 + moveSeconds * 2;
+      el.style.setProperty("--modal-marquee-distance", `${distance}px`);
+      el.style.setProperty("--modal-marquee-duration", `${totalSeconds}s`);
+      el.classList.add("modal-marquee-active");
+    });
+  }
+
+  function setShowcaseScrollingText_(el, text, allowMarquee = true) {
+    if (!el) return;
+    const value = String(text || "");
+    const eligible = Boolean(allowMarquee);
+    if (
+      el.dataset.showcaseFullText === value &&
+      el.dataset.showcaseMarqueeEligible === (eligible ? "1" : "0") &&
+      el.querySelector(".modal-marquee-inner")
+    ) return;
+
+    el.dataset.showcaseFullText = value;
+    el.dataset.showcaseMarqueeEligible = eligible ? "1" : "0";
+    el.title = value;
+    el.innerHTML = "";
+    el.classList.remove("modal-marquee-active");
+    el.style.removeProperty("--modal-marquee-distance");
+    el.style.removeProperty("--modal-marquee-duration");
+
+    const inner = document.createElement("span");
+    inner.className = "modal-marquee-inner";
+    inner.textContent = value;
+    el.appendChild(inner);
+    if (!eligible) return;
+
+    window.requestAnimationFrame(() => {
+      if (!el.isConnected || el.dataset.showcaseFullText !== value || el.dataset.showcaseMarqueeEligible !== "1") return;
+      const distance = Math.ceil(inner.scrollWidth - el.clientWidth);
+      if (distance <= 2) return;
       const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
       const totalSeconds = 4 + moveSeconds * 2;
       el.style.setProperty("--modal-marquee-distance", `${distance}px`);
@@ -3017,7 +3408,7 @@
 
     try {
       await writeTextToClipboard(shareUrl);
-      console.log(`[공유링크 복사 성공] ${id} → ${shareUrl}`);
+      debugLog(`[공유링크 복사 성공] ${id} → ${shareUrl}`);
       showCooldownText("공유링크를 복사했습니다");
       return true;
     } catch (err) {
@@ -3188,21 +3579,58 @@
       <div id="youtubePlayerMount" class="youtube-player-mount"></div>
       <button class="youtube-side-nav youtube-side-prev" type="button" aria-label="이전곡"></button>
       <button class="youtube-side-nav youtube-side-next" type="button" aria-label="다음곡"></button>
-      <div class="youtube-side-time youtube-side-time-current" aria-hidden="true">00:00</div>
-      <div class="youtube-side-time youtube-side-time-remaining" aria-hidden="true">-00:00</div>
+      <button class="youtube-side-time youtube-side-time-current" type="button" aria-label="10초 전으로 이동" title="10초 전으로 이동">00:00</button>
+      <button class="youtube-side-time youtube-side-time-remaining" type="button" aria-label="10초 후로 이동" title="10초 후로 이동">-00:00</button>
     `;
     const prev = els.youtubeFrameWrap.querySelector(".youtube-side-prev");
     const next = els.youtubeFrameWrap.querySelector(".youtube-side-next");
-    if (prev) prev.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      playPreviousPlaylistItem_();
-    });
-    if (next) next.addEventListener("click", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      playNextPlaylistItem_("manual");
-    });
+    const currentTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
+    const remainingTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
+    const bindStableNav = (button, action) => {
+      if (!button) return;
+      button.addEventListener("pointerdown", event => {
+        if (!event.isPrimary || (typeof event.button === "number" && event.button !== 0)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        action();
+      });
+      button.addEventListener("click", event => {
+        // 포인터 조작은 pointerdown에서 처리해 레이아웃 변화로 click이 취소되는 상황을 피합니다.
+        // click.detail === 0 은 키보드 활성화 또는 프로그램 방식의 접근성 클릭입니다.
+        if (event.detail !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        action();
+      });
+    };
+    bindStableNav(prev, () => playPreviousPlaylistItem_());
+    bindStableNav(next, () => playNextPlaylistItem_("manual"));
+    if (currentTimeButton) {
+      currentTimeButton.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        seekPlaylistSegmentByTenSeconds_(-1);
+      });
+      currentTimeButton.addEventListener("contextmenu", event => {
+        if (!isDesktopPointerEnvironment_()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        seekPlaylistSegmentBySeconds_(-1, 30);
+      });
+    }
+    if (remainingTimeButton) {
+      remainingTimeButton.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        seekPlaylistSegmentByTenSeconds_(1);
+      });
+      remainingTimeButton.addEventListener("contextmenu", event => {
+        if (!isDesktopPointerEnvironment_()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        seekPlaylistSegmentBySeconds_(1, 30);
+      });
+    }
   }
 
   function openYoutubeModal(url, meta = {}, options = {}) {
@@ -3225,6 +3653,20 @@
     }
 
     const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
+    const timelineText = String(meta.timeline || "").trim();
+    const endText = String(meta.end || "").trim();
+    const hasTimelineValue = timelineText !== "" && /^\d+(?::[0-5]?\d){0,2}$/.test(timelineText);
+    const dataStartSeconds = hasTimelineValue ? timelineToSeconds(timelineText) : startSeconds;
+    const dataEndSeconds = endText ? timelineToSeconds(endText) : NaN;
+    const hasEndValue = endText !== "" && /^\d+(?::[0-5]?\d){0,2}$/.test(endText) && Number.isFinite(dataEndSeconds);
+    const hasValidSongSegment = hasTimelineValue && hasEndValue && dataStartSeconds >= 0 && dataEndSeconds > dataStartSeconds;
+    normalPlaybackSegment = {
+      start: Math.max(0, Number.isFinite(dataStartSeconds) ? dataStartSeconds : startSeconds),
+      end: hasValidSongSegment ? dataEndSeconds : null,
+      hasStart: hasTimelineValue || startSeconds > 0,
+      hasEnd: hasEndValue,
+      hasSegment: hasValidSongSegment
+    };
     const token = ++youtubePlayerToken;
     youtubeIsPlaying = false;
     stopTabTitleMarquee_(true);
@@ -3271,7 +3713,22 @@
       });
   }
 
-  function closeYoutubeModal() {
+  function closeYoutubeModal(skipNormalFade = false) {
+    if (!skipNormalFade && !normalPlaybackCloseFadePending &&
+        !(playlistPlayback && playlistPlayback.active) && youtubePlayer && youtubeIsPlaying &&
+        typeof youtubePlayer.setVolume === "function") {
+      normalPlaybackCloseFadePending = true;
+      const fromVolume = getPlaylistCurrentVolume_(normalPlaybackFadeState ? normalPlaybackFadeState.targetVolume : 100);
+      clearNormalPlaybackMonitor_();
+      runPlaylistVolumeFade_(fromVolume, 0, 420, t => t, () => {
+        normalPlaybackCloseFadePending = false;
+        closeYoutubeModal(true);
+      });
+      return;
+    }
+    if (normalPlaybackCloseFadePending && !skipNormalFade) return;
+    normalPlaybackCloseFadePending = false;
+    clearNormalPlaybackMonitor_();
     youtubeIsPlaying = false;
     stopTabTitleMarquee_(true);
     closeBurninShield_();
@@ -3292,6 +3749,8 @@
     clearPlaylistSegmentWatcher_();
     clearPlaylistVolumeFade_();
     clearPlaylistVolumeMonitor_();
+    normalPlaybackFadeState = null;
+    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
     playlistPlayback = null;
     renderPlaylistPlaybackUi_();
     if (els.modalLikePanel) els.modalLikePanel.innerHTML = "";
@@ -3388,6 +3847,15 @@
               playlistPlayback.volumeMode = "starting";
               playlistPlayback.resumeVolume = 0;
               preparePlaylistPlayerForFadeStart_(event.target);
+            } else if (event.target && typeof event.target.setVolume === "function") {
+              let targetVolume = 100;
+              try {
+                const observedVolume = Number(event.target.getVolume && event.target.getVolume());
+                if (Number.isFinite(observedVolume)) targetVolume = Math.max(0, Math.min(100, observedVolume));
+              } catch {}
+              normalPlaybackFadeState = { token, targetVolume, phase: "starting", endFadeStarted: false };
+              if (targetVolume > 0) preparePlaylistPlayerForFadeStart_(event.target);
+              else setPlaylistAutomatedVolume_(event.target, 0);
             }
             event.target.playVideo();
           } catch (err) {
@@ -3462,6 +3930,8 @@
           handlePlaylistPlaybackPlaying_();
           setupMediaSessionPlaybackControls_();
           scheduleMediaSessionRefresh_();
+        } else {
+          handleNormalPlaybackPlaying_(token);
         }
         startPlaylistSegmentWatcher_();
         break;
@@ -3489,6 +3959,12 @@
           if (!youtubeStartedPlaying && playlistPlayback.volumeMode === "starting") break;
           handlePlaylistPlaybackPaused_();
           setupMediaSessionPlaybackControls_();
+        } else if (normalPlaybackFadeState && normalPlaybackFadeState.token === token) {
+          clearPlaylistVolumeFade_();
+          clearNormalPlaybackMonitor_();
+          setPlaylistVolumeImmediately_(0);
+          normalPlaybackFadeState.phase = "paused";
+          normalPlaybackFadeState.endFadeStarted = false;
         }
         break;
       case YT.PlayerState.ENDED:
@@ -3504,6 +3980,12 @@
             finishPlaylistPlayback_();
           } else {
             playNextPlaylistItem_("ended");
+          }
+        } else {
+          clearNormalPlaybackMonitor_();
+          if (normalPlaybackFadeState && normalPlaybackFadeState.token === token) {
+            normalPlaybackFadeState.phase = "ended";
+            setPlaylistVolumeImmediately_(0);
           }
         }
         break;
@@ -3524,6 +4006,8 @@
   }
 
   function destroyYoutubePlayer_(clearFrame = true) {
+    clearNormalPlaybackMonitor_();
+    normalPlaybackFadeState = null;
     clearYoutubeLoadingTimers_();
     clearYoutubeShareAutoplayWaitTimer_();
     youtubeAwaitingManualPlayback = false;
@@ -3651,6 +4135,34 @@
     }
   }
 
+  function normalizeYoutubeHost_(hostname) {
+    return String(hostname || "").toLowerCase().replace(/^www\./, "").replace(/^m\./, "");
+  }
+
+  function sanitizeExternalUrl_(value, options = {}) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const parsed = new URL(raw, window.location.href);
+      const protocol = parsed.protocol.toLowerCase();
+      if (protocol !== "https:" && protocol !== "http:") return "";
+      if (parsed.username || parsed.password) return "";
+      if (options.youtubeOnly) {
+        const host = normalizeYoutubeHost_(parsed.hostname);
+        if (host !== "youtube.com" && host !== "youtu.be") return "";
+      }
+      return parsed.href;
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeYoutubeVideoUrl_(value) {
+    const safeUrl = sanitizeExternalUrl_(value, { youtubeOnly: true });
+    if (!safeUrl || !extractYoutubeVideoId(safeUrl)) return "";
+    return safeUrl;
+  }
+
   function makeYoutubeEmbedUrl(url) {
     const raw = normalizeYoutubeUrlForParse(String(url || "").trim());
     if (!raw) return "";
@@ -3661,14 +4173,15 @@
     } catch {
       return "";
     }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
 
-    const host = parsed.hostname.replace(/^www\./, "");
+    const host = normalizeYoutubeHost_(parsed.hostname);
     let videoId = "";
 
     if (host === "youtu.be") {
       const firstPath = parsed.pathname.split("/").filter(Boolean)[0] || "";
       videoId = firstPath.split(/[?&]/)[0] || "";
-    } else if (host.endsWith("youtube.com")) {
+    } else if (host === "youtube.com") {
       if (parsed.pathname === "/watch") {
         videoId = parsed.searchParams.get("v") || "";
       } else if (parsed.pathname.startsWith("/shorts/")) {
@@ -3703,13 +4216,14 @@
     } catch {
       return "";
     }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
 
-    const host = parsed.hostname.replace(/^www\./, "");
+    const host = normalizeYoutubeHost_(parsed.hostname);
     let videoId = "";
 
     if (host === "youtu.be") {
       videoId = parsed.pathname.split("/").filter(Boolean)[0] || "";
-    } else if (host.endsWith("youtube.com")) {
+    } else if (host === "youtube.com") {
       if (parsed.pathname === "/watch") {
         videoId = parsed.searchParams.get("v") || "";
       } else if (parsed.pathname.startsWith("/shorts/") || parsed.pathname.startsWith("/embed/")) {
@@ -4249,8 +4763,9 @@
 
     try {
       const parsed = new URL(raw);
-      const host = parsed.hostname.replace(/^www\./, "");
-      if (!host.endsWith("youtube.com") && host !== "youtu.be") return "";
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+      const host = normalizeYoutubeHost_(parsed.hostname);
+      if (host !== "youtube.com" && host !== "youtu.be") return "";
       return String(parsed.searchParams.get("list") || "").trim();
     } catch {
       return "";
@@ -4259,8 +4774,9 @@
 
   function formatNoticeItemHtml(item) {
     const body = formatNoticeTextHtml(item.text);
-    if (item.link) {
-      return `<a class="notice-link" href="${escapeHtml(item.link)}" target="_blank" rel="noopener noreferrer">${body}</a>`;
+    const safeLink = sanitizeExternalUrl_(item.link);
+    if (safeLink) {
+      return `<a class="notice-link" href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer">${body}</a>`;
     }
     return `<span class="notice-item">${body}</span>`;
   }
@@ -4269,10 +4785,208 @@
     return escapeHtml(text).replace(/\[[^\]]+\]/g, match => `<strong>${match}</strong>`);
   }
 
-  function renderCoverSection() {
+  function getShowcaseScrollState_(kind) {
+    return kind === "rec" ? recScrollState : coverScrollState;
+  }
+
+  function getShowcaseItemsAndIndex_(kind) {
+    if (kind === "rec") return { items: getRecDisplayItems_(), index: recIndex };
+    return { items: getCoverDisplayItems_(), index: coverIndex };
+  }
+
+  function syncShowcaseEdgePadding_(track) {
+    if (!track) return;
+    const firstTab = track.querySelector(kindTabSelector_(track));
+    if (!firstTab) return;
+    const edgeSpace = Math.max(0, Math.round((track.clientHeight - firstTab.offsetHeight) / 2));
+    track.style.paddingTop = `${edgeSpace}px`;
+    track.style.paddingBottom = `${edgeSpace}px`;
+  }
+
+  function kindTabSelector_(track) {
+    return track && track.id === "recTrack" ? "[data-rec-tab-index]" : "[data-cover-tab-index]";
+  }
+
+  function kindVirtualTabSelector_(track) {
+    return track && track.id === "recTrack" ? "[data-rec-virtual-index]" : "[data-cover-virtual-index]";
+  }
+
+  function getShowcaseVirtualIndex_(kind) {
+    return kind === "rec" ? recVirtualIndex : coverVirtualIndex;
+  }
+
+  function setShowcaseVirtualIndex_(kind, value) {
+    if (kind === "rec") recVirtualIndex = value;
+    else coverVirtualIndex = value;
+  }
+
+  function setShowcaseLogicalIndex_(kind, value) {
+    if (kind === "rec") recIndex = value;
+    else coverIndex = value;
+  }
+
+  function centerShowcaseTab_(track, tab, kind, animate = false) {
+    if (!track || !tab || !track.clientHeight) return;
+    syncShowcaseEdgePadding_(track);
+    const trackRect = track.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const targetTop = track.scrollTop + tabRect.top - trackRect.top + tabRect.height / 2 - track.clientHeight / 2;
+    if (Math.abs(track.scrollTop - targetTop) <= 2) return;
+    const state = getShowcaseScrollState_(kind);
+    state.programmatic = true;
+    if (state.programmaticTimer) window.clearTimeout(state.programmaticTimer);
+    track.scrollTo({ top: Math.max(0, targetTop), behavior: animate ? "smooth" : "auto" });
+    state.programmaticTimer = window.setTimeout(() => {
+      state.programmatic = false;
+      state.programmaticTimer = null;
+    }, animate ? 500 : 100);
+  }
+
+  // Keep five visual cycles in the DOM. When the active tab reaches an outer cycle,
+  // jump to the equivalent copy two cycles away while preserving its viewport position.
+  function normalizeShowcaseVirtualIndex_(kind, track, count) {
+    if (!count) return 0;
+    let virtualIndex = getShowcaseVirtualIndex_(kind);
+    let normalizedIndex = virtualIndex;
+    if (virtualIndex < count) normalizedIndex = virtualIndex + count * 2;
+    else if (virtualIndex >= count * 4) normalizedIndex = virtualIndex - count * 2;
+
+    if (normalizedIndex !== virtualIndex) {
+      const selector = kindVirtualTabSelector_(track);
+      const source = track && track.querySelector(`${selector}[data-${kind}-virtual-index="${virtualIndex}"]`);
+      const target = track && track.querySelector(`${selector}[data-${kind}-virtual-index="${normalizedIndex}"]`);
+      if (source && target && track.clientHeight) {
+        const delta = target.getBoundingClientRect().top - source.getBoundingClientRect().top;
+        const state = getShowcaseScrollState_(kind);
+        state.programmatic = true;
+        if (state.programmaticTimer) window.clearTimeout(state.programmaticTimer);
+        track.scrollTop += delta;
+        state.programmaticTimer = window.setTimeout(() => {
+          state.programmatic = false;
+          state.programmaticTimer = null;
+        }, 100);
+      }
+      virtualIndex = normalizedIndex;
+      setShowcaseVirtualIndex_(kind, virtualIndex);
+    }
+
+    setShowcaseLogicalIndex_(kind, wrapIndex(virtualIndex, count));
+    return virtualIndex;
+  }
+
+  function bindShowcaseScroll_(track, kind) {
+    if (!track) return;
+    const state = getShowcaseScrollState_(kind);
+    track.addEventListener("scroll", () => {
+      if (state.programmatic) return;
+      if (state.frame) return;
+      state.frame = window.requestAnimationFrame(() => {
+        state.frame = 0;
+        const tabs = [...track.querySelectorAll(kindTabSelector_(track))];
+        if (!tabs.length) return;
+        const centerY = track.getBoundingClientRect().top + track.clientHeight / 2;
+        let nearestTab = null;
+        let nearestDistance = Infinity;
+        tabs.forEach(tab => {
+          const rect = tab.getBoundingClientRect();
+          const distance = Math.abs(rect.top + rect.height / 2 - centerY);
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            nearestTab = tab;
+          }
+        });
+        if (!nearestTab) return;
+        const nextVirtualIndex = Number(nearestTab.dataset[kind === "rec" ? "recVirtualIndex" : "coverVirtualIndex"]);
+        const { items } = getShowcaseItemsAndIndex_(kind);
+        if (!Number.isInteger(nextVirtualIndex) || !items.length) return;
+        if (nextVirtualIndex !== getShowcaseVirtualIndex_(kind)) {
+          setShowcaseVirtualIndex_(kind, nextVirtualIndex);
+          setShowcaseLogicalIndex_(kind, wrapIndex(nextVirtualIndex, items.length));
+          normalizeShowcaseVirtualIndex_(kind, track, items.length);
+          if (kind === "rec") updateRecShowcase_(items, false, { centerTab: false });
+          else updateCoverShowcase_(items, false, { centerTab: false });
+        }
+        if (state.settleTimer) window.clearTimeout(state.settleTimer);
+        state.settleTimer = window.setTimeout(() => {
+          state.settleTimer = null;
+          const current = getShowcaseVirtualIndex_(kind);
+          const activeTab = track.querySelector(`${kindVirtualTabSelector_(track)}[data-${kind}-virtual-index="${current}"]`);
+          if (activeTab) centerShowcaseTab_(track, activeTab, kind, true);
+          if (kind === "rec") resetRecAutoTimer();
+          else resetCoverAutoTimer();
+        }, 140);
+      });
+    }, { passive: true });
+  }
+
+  function getCoverDisplayKey_(item) {
+    return `${String(item && item.id || item && item.videoId || "").trim()}\u001f${String(item && item.url || "").trim()}`;
+  }
+
+  function getCoverSequenceNumber_(item) {
+    const match = String(item && item.id || "").trim().match(/^COVER_(\d+)$/i);
+    return match ? Number(match[1]) : -1;
+  }
+
+  function getCoverDisplayItems_() {
+    const indexedItems = coverItems.map((item, index) => ({ ...item, _actualIndex: index }));
+    const fingerprint = indexedItems
+      .map(item => `${getCoverDisplayKey_(item)}\u001f${String(item.thumbnail || "")}`)
+      .sort()
+      .join("\u001e");
+
+    if (fingerprint !== coverDisplayFingerprint) {
+      const keyed = indexedItems.map(item => ({ key: getCoverDisplayKey_(item), item }));
+      let newestEntry = null;
+      for (const entry of keyed) {
+        const sequence = getCoverSequenceNumber_(entry.item);
+        if (sequence >= 0 && (!newestEntry || sequence > getCoverSequenceNumber_(newestEntry.item))) {
+          newestEntry = entry;
+        }
+      }
+      if (!newestEntry && keyed.length) newestEntry = keyed[keyed.length - 1];
+      const remaining = keyed.filter(entry => entry !== newestEntry);
+      const shuffled = shuffleArray(remaining);
+      coverDisplayIdOrder = [
+        ...(newestEntry ? [newestEntry.key] : []),
+        ...shuffled.map(entry => entry.key)
+      ];
+      coverDisplayFingerprint = fingerprint;
+      coverTabRenderedOrder = "";
+      coverIndex = 0;
+      coverVirtualIndex = indexedItems.length * 2;
+    }
+
+    const byKey = new Map(indexedItems.map(item => [getCoverDisplayKey_(item), item]));
+    const displayItems = coverDisplayIdOrder.map(key => byKey.get(key)).filter(Boolean);
+    // The original index is retained because playlist-add logic resolves entries from coverItems.
+    return displayItems;
+  }
+
+  function getCoverDisplayTitle_(item) {
+    return getReadyCoverTitle_(item && item.title) || getResolvedCoverFallbackTitle_(item);
+  }
+
+  function renderCoverTab_(item, displayIndex, virtualIndex) {
+    const safeThumbnail = sanitizeExternalUrl_(item.thumbnail);
+    const fallbackThumbnail = sanitizeExternalUrl_(item.fallbackThumbnail);
+    const title = getCoverDisplayTitle_(item);
+    const image = safeThumbnail
+      ? `<img class="cover-tab-image" src="${escapeHtml(safeThumbnail)}" alt="" loading="lazy" decoding="async"${fallbackThumbnail ? ` data-fallback="${escapeHtml(fallbackThumbnail)}"` : ""} onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" />`
+      : "";
+    return `
+      <button class="cover-tab" type="button" role="tab" data-cover-tab-index="${displayIndex}" data-cover-virtual-index="${virtualIndex}" aria-controls="coverFeatureVisual" aria-selected="${virtualIndex === coverVirtualIndex ? "true" : "false"}" tabindex="${virtualIndex === coverVirtualIndex ? "0" : "-1"}" title="${escapeHtml(title)}">
+        <span class="cover-tab-backdrop ${safeThumbnail ? "media-thumb-loading" : ""}" aria-hidden="true">${image}</span>
+        <span class="cover-title cover-tab-title" data-cover-title="${escapeHtml(item.id)}">${escapeHtml(title)}</span>
+      </button>
+    `;
+  }
+
+  function renderCoverSection(animate = false) {
     if (!els.coverDetails || !els.coverTrack) return;
 
-    const count = coverItems.length;
+    const displayItems = getCoverDisplayItems_();
+    const count = displayItems.length;
     if (els.coverDescription) {
       els.coverDescription.textContent = count ? `커버곡 ${count}곡을 표시합니다.` : "표시할 커버곡이 없습니다.";
     }
@@ -4280,8 +4994,15 @@
     if (!count) {
       if (els.coverEmpty) els.coverEmpty.hidden = false;
       if (els.coverCarousel) els.coverCarousel.hidden = true;
-      setCoverNavHidden(true);
       els.coverTrack.innerHTML = "";
+      coverTabRenderedOrder = "";
+      if (els.coverFeature) {
+        els.coverFeature.removeAttribute("href");
+        delete els.coverFeature.dataset.coverIndex;
+      }
+      if (els.coverFeatureImage) els.coverFeatureImage.removeAttribute("src");
+      if (els.coverFeatureTitle) els.coverFeatureTitle.textContent = "";
+      clearCoverAutoTimer_();
       return;
     }
 
@@ -4290,10 +5011,130 @@
     setCoverNavHidden(false);
 
     coverIndex = wrapIndex(coverIndex, count);
-    const visible = getVisibleCoverItems();
-    els.coverTrack.innerHTML = visible.map(renderCoverCard).join("");
-    bindCoverCards();
-    enrichCoverTitles(visible);
+    const displayOrder = displayItems.map(getCoverDisplayKey_).join("\u001e");
+    if (displayOrder !== coverTabRenderedOrder) {
+      coverVirtualIndex = displayItems.length * 2 + coverIndex;
+      els.coverTrack.innerHTML = Array.from({ length: 5 }, (_, cycle) =>
+        displayItems.map((item, index) => renderCoverTab_(item, index, cycle * displayItems.length + index)).join("")
+      ).join("");
+      coverTabRenderedOrder = displayOrder;
+      bindMediaThumbnailLoading_(els.coverTrack);
+      syncShowcaseEdgePadding_(els.coverTrack);
+    }
+
+    updateCoverShowcase_(displayItems, animate);
+    void enrichCoverTitles(displayItems);
+    resetCoverAutoTimer();
+  }
+
+  function updateCoverShowcase_(displayItems = getCoverDisplayItems_(), animate = false, options = {}) {
+    if (!displayItems.length) return;
+    coverIndex = wrapIndex(coverIndex, displayItems.length);
+    const activeItem = displayItems[coverIndex];
+    const activeKey = getCoverDisplayKey_(activeItem);
+    const displayTitle = getCoverDisplayTitle_(activeItem);
+    const safeUrl = sanitizeExternalUrl_(activeItem.url, { youtubeOnly: true });
+    const safeThumbnail = sanitizeExternalUrl_(activeItem.thumbnail);
+    const safeFallbackThumbnail = sanitizeExternalUrl_(activeItem.fallbackThumbnail);
+
+    if (els.coverTrack) {
+      els.coverTrack.querySelectorAll("[data-cover-tab-index]").forEach(tab => {
+        const index = Number(tab.dataset.coverTabIndex);
+        const virtualIndex = Number(tab.dataset.coverVirtualIndex);
+        const isActive = virtualIndex === coverVirtualIndex;
+        tab.classList.toggle("active", isActive);
+        tab.setAttribute("aria-selected", isActive ? "true" : "false");
+        tab.tabIndex = isActive ? 0 : -1;
+        const item = displayItems[index];
+        const titleElement = tab.querySelector("[data-cover-title]");
+        if (item && titleElement) {
+          const title = getCoverDisplayTitle_(item);
+          setShowcaseScrollingText_(titleElement, title, isActive);
+          tab.title = title;
+        }
+      });
+
+      if (options.centerTab !== false) {
+        const activeTab = els.coverTrack.querySelector(`[data-cover-virtual-index="${coverVirtualIndex}"]`);
+        if (activeTab) centerShowcaseTab_(els.coverTrack, activeTab, "cover", animate);
+      }
+    }
+
+    if (els.coverFeature) {
+      if (safeUrl) {
+        els.coverFeature.href = safeUrl;
+        els.coverFeature.removeAttribute("aria-disabled");
+        els.coverFeature.tabIndex = 0;
+      } else {
+        els.coverFeature.removeAttribute("href");
+        els.coverFeature.setAttribute("aria-disabled", "true");
+        els.coverFeature.tabIndex = -1;
+      }
+      els.coverFeature.dataset.coverIndex = String(activeItem._actualIndex);
+      els.coverFeature.dataset.playlistSection = String(activeItem.section || "커버곡");
+      els.coverFeature.dataset.playlistHint = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
+      els.coverFeature.title = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
+      els.coverFeature.setAttribute("aria-label", `${displayTitle} 새 탭에서 열기`);
+    }
+
+    if (els.coverFeatureTitle) {
+      els.coverFeatureTitle.dataset.coverTitle = String(activeItem.id || "");
+      setShowcaseScrollingText_(els.coverFeatureTitle, displayTitle);
+    }
+
+    if (animate && coverFeatureActiveKey && activeKey !== coverFeatureActiveKey && els.coverFeatureVisual) {
+      els.coverFeatureVisual.classList.add("is-changing");
+      if (coverFeatureAnimationTimer) window.clearTimeout(coverFeatureAnimationTimer);
+      coverFeatureAnimationTimer = window.setTimeout(() => {
+        if (els.coverFeatureVisual) els.coverFeatureVisual.classList.remove("is-changing");
+        coverFeatureAnimationTimer = null;
+      }, 280);
+    }
+
+    if (els.coverFeatureImage) {
+      const currentSrc = els.coverFeatureImage.getAttribute("src") || "";
+      if (safeThumbnail && currentSrc !== safeThumbnail) {
+        els.coverFeatureImage.dataset.fallback = safeFallbackThumbnail;
+        els.coverFeatureImage.dataset.fallbackUsed = "";
+        const imageWrap = els.coverFeatureImage.closest(".cover-feature-image-wrap");
+        if (imageWrap) {
+          imageWrap.classList.add("media-thumb-loading");
+          imageWrap.classList.remove("media-thumb-loaded");
+        }
+        els.coverFeatureImage.onerror = function () {
+          const fallback = sanitizeExternalUrl_(this.dataset.fallback);
+          if (fallback && !this.dataset.fallbackUsed && this.src !== fallback) {
+            this.dataset.fallbackUsed = "1";
+            this.src = fallback;
+            return;
+          }
+          this.classList.add("is-broken");
+          if (imageWrap) {
+            imageWrap.classList.remove("media-thumb-loading");
+            imageWrap.classList.add("media-thumb-loaded");
+          }
+        };
+        els.coverFeatureImage.onload = function () {
+          if (imageWrap) {
+            imageWrap.classList.remove("media-thumb-loading");
+            imageWrap.classList.add("media-thumb-loaded");
+          }
+        };
+        els.coverFeatureImage.classList.remove("is-broken");
+        els.coverFeatureImage.src = safeThumbnail;
+      } else if (!safeThumbnail) {
+        els.coverFeatureImage.removeAttribute("src");
+        els.coverFeatureImage.classList.add("is-broken");
+        const imageWrap = els.coverFeatureImage.closest(".cover-feature-image-wrap");
+        if (imageWrap) {
+          imageWrap.classList.remove("media-thumb-loading");
+          imageWrap.classList.add("media-thumb-loaded");
+        }
+      }
+      els.coverFeatureImage.alt = "";
+      bindMediaThumbnailLoading_(els.coverFeatureVisual);
+    }
+    coverFeatureActiveKey = activeKey;
   }
 
   function setCoverNavHidden(hidden) {
@@ -4301,31 +5142,14 @@
     if (els.coverNextButton) els.coverNextButton.hidden = Boolean(hidden);
   }
 
-  function getVisibleCoverItems() {
-    const count = coverItems.length;
-    if (!count) return [];
-    return [-1, 0, 1].map(offset => {
-      const actualIndex = wrapIndex(coverIndex + offset, count);
-      return { ...coverItems[actualIndex], _actualIndex: actualIndex, _slot: offset };
-    });
-  }
-
-  function renderCoverCard(item) {
-    const isCenter = item._slot === 0;
-    return `
-      <a class="cover-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-cover-index="${escapeHtml(item._actualIndex)}" data-carousel-playlist-kind="cover" data-playlist-section="${escapeHtml(item.section || "커버곡")}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">
-        <div class="cover-thumb-wrap media-thumb-loading">
-          <img class="cover-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />
-        </div>
-        <div class="cover-title" data-cover-title="${escapeHtml(item.id)}">${escapeHtml(item.title || "커버곡")}</div>
-      </a>
-    `;
-  }
-
   function bindMediaThumbnailLoading_(root) {
     if (!root) return;
-    root.querySelectorAll(".cover-thumb-wrap img.cover-thumb").forEach(img => {
-      const wrap = img.closest(".cover-thumb-wrap");
+    const selector = ".cover-thumb-wrap img.cover-thumb, .cover-tab-backdrop img.cover-tab-image, .cover-feature-image-wrap img.cover-feature-image";
+    const images = [];
+    if (root.matches && root.matches(selector)) images.push(root);
+    root.querySelectorAll(selector).forEach(img => images.push(img));
+    images.forEach(img => {
+      const wrap = img.closest(".cover-thumb-wrap, .cover-tab-backdrop, .cover-feature-image-wrap");
       if (!wrap) return;
       const finish = () => {
         wrap.classList.remove("media-thumb-loading");
@@ -4343,33 +5167,50 @@
   }
 
   async function enrichCoverTitles(items) {
-    const uniqueItems = items.filter(item => item && item.url && (!coverItems[item._actualIndex] || coverItems[item._actualIndex].title === "커버곡을 불러오는 중..."));
+    const uniqueItems = (Array.isArray(items) ? items : []).filter(item => {
+      if (!item || !item.url || !Number.isInteger(item._actualIndex)) return false;
+      const current = coverItems.find(candidate => String(candidate && candidate.id || "") === String(item.id || ""));
+      return Boolean(current && isPendingCoverTitle_(current.title));
+    });
+    if (!uniqueItems.length) return;
+
+    let cursor = 0;
     let changed = false;
-    await Promise.all(uniqueItems.map(async item => {
-      try {
-        const title = await fetchYoutubeOembedTitle(item.url);
-        if (!title) return;
-        const target = coverItems[item._actualIndex];
-        if (target && target.title !== title) {
-          target.title = title;
-          changed = true;
-        }
-        if (els.coverTrack) {
-          els.coverTrack.querySelectorAll(`[data-cover-title="${cssEscape(item.id)}"]`).forEach(el => {
-            el.textContent = title;
-          });
-        }
-      } catch (err) {
-        const target = coverItems[item._actualIndex];
-        if (target && target.title === "커버곡을 불러오는 중...") {
-          target.title = "YouTube 커버곡";
-          changed = true;
+    const worker = async () => {
+      while (cursor < uniqueItems.length) {
+        const item = uniqueItems[cursor++];
+        const target = coverItems.find(candidate => String(candidate && candidate.id || "") === String(item.id || ""));
+        if (!target || !isPendingCoverTitle_(target.title)) continue;
+        try {
+          const title = await resolveExactCoverTitle_(target, 1);
+          if (title && target.title !== title) {
+            target.title = title;
+            changed = true;
+            if (els.coverTrack) {
+              els.coverTrack.querySelectorAll(`[data-cover-title="${cssEscape(item.id)}"]`).forEach(el => {
+                const activeTab = Boolean(el.closest(".cover-tab") && el.closest(".cover-tab").classList.contains("active"));
+                setShowcaseScrollingText_(el, title, activeTab);
+              });
+            }
+          } else if (!title && isPendingCoverTitle_(target.title)) {
+            target.title = getResolvedCoverFallbackTitle_(target);
+            changed = true;
+          }
+        } catch (err) {
+          if (target && isPendingCoverTitle_(target.title)) {
+            target.title = getResolvedCoverFallbackTitle_(target);
+            changed = true;
+          }
         }
       }
-    }));
+    };
+
+    const workers = Math.min(3, uniqueItems.length);
+    await Promise.all(Array.from({ length: workers }, () => worker()));
     if (changed) {
       persistCoverItemsToLocalCache_();
       hydrateStoredCoverPlaylistEntries_();
+      updateCoverShowcase_(getCoverDisplayItems_(), false);
     }
   }
 
@@ -4657,20 +5498,13 @@
   }
 
   function moveCoverCarousel(direction) {
-    if (!coverItems.length || coverMoving) return;
-    coverMoving = true;
-    if (els.coverTrack) {
-      els.coverTrack.classList.remove("move-left", "move-right");
-      void els.coverTrack.offsetWidth;
-      els.coverTrack.classList.add(direction > 0 ? "move-left" : "move-right");
-    }
-
-    window.setTimeout(() => {
-      coverIndex = wrapIndex(coverIndex + direction, coverItems.length);
-      if (els.coverTrack) els.coverTrack.classList.remove("move-left", "move-right");
-      coverMoving = false;
-      renderCoverSection();
-    }, 260);
+    const displayItems = getCoverDisplayItems_();
+    if (!displayItems.length) return;
+    coverVirtualIndex += direction;
+    normalizeShowcaseVirtualIndex_("cover", els.coverTrack, displayItems.length);
+    coverIndex = wrapIndex(coverVirtualIndex, displayItems.length);
+    renderCoverSection(true);
+    resetCoverAutoTimer();
   }
 
   function wrapIndex(index, length) {
@@ -4687,20 +5521,36 @@
     return arr;
   }
 
+  function clearCoverAutoTimer_() {
+    if (coverAutoTimer) {
+      window.clearTimeout(coverAutoTimer);
+      coverAutoTimer = null;
+    }
+  }
+
   function startCoverAutoTimer() {
-    if (coverAutoTimer) window.clearInterval(coverAutoTimer);
-    coverAutoTimer = window.setInterval(() => {
-      if (!shouldAutoMoveCover()) return;
-      moveCoverCarousel(-1);
-    }, 10000);
+    resetCoverAutoTimer();
+  }
+
+  function resetCoverAutoTimer() {
+    clearCoverAutoTimer_();
+    if (coverHover || !els.coverDetails || !els.coverDetails.open) return;
+    if (!els.coverCarousel || els.coverCarousel.hidden || getCoverDisplayItems_().length <= 1) return;
+    coverAutoTimer = window.setTimeout(() => {
+      coverAutoTimer = null;
+      if (shouldAutoMoveCover()) {
+        moveCoverCarousel(1);
+      } else {
+        resetCoverAutoTimer();
+      }
+    }, 15000);
   }
 
   function shouldAutoMoveCover() {
     if (!els.coverDetails || !els.coverDetails.open) return false;
     if (!els.coverCarousel || els.coverCarousel.hidden) return false;
-    if (coverHover || coverMoving) return false;
-    if (coverItems.length <= 1) return false;
-    return isElementFullyVisible(els.coverDetails);
+    if (coverHover || getCoverDisplayItems_().length <= 1) return false;
+    return true;
   }
 
   function collapseCoverSection() {
@@ -4711,10 +5561,65 @@
     if (els.recDetails && els.recDetails.open) els.recDetails.open = false;
   }
 
-  function renderRecSection() {
+  function getRecDisplayKey_(item, index = 0) {
+    const id = String(item && item.id || "").trim();
+    const url = String(item && item.url || "").trim();
+    const type = String(item && item.type || "").trim();
+    const ids = Array.isArray(item && item.ids) ? item.ids.join("|") : "";
+    const identity = id || url || ids;
+    return identity ? `${identity}\u001f${url}\u001f${type}` : `rec-index:${index}`;
+  }
+
+  function getRecDisplayItems_() {
+    const seenKeys = new Map();
+    const indexedItems = recItems.map((item, index) => {
+      const baseKey = getRecDisplayKey_(item, index);
+      const occurrence = seenKeys.get(baseKey) || 0;
+      seenKeys.set(baseKey, occurrence + 1);
+      return { ...item, _actualIndex: index, _displayKey: `${baseKey}\u001f${occurrence}` };
+    });
+    const fingerprint = indexedItems.map(item => item._displayKey).sort().join("\u001e");
+    if (fingerprint !== recDisplayFingerprint) {
+      recDisplayOrder = shuffleArray(indexedItems.map(item => item._displayKey));
+      recDisplayFingerprint = fingerprint;
+      recTabRenderedOrder = "";
+      recIndex = 0;
+      recVirtualIndex = indexedItems.length * 2;
+    }
+    const byKey = new Map(indexedItems.map(item => [item._displayKey, item]));
+    return recDisplayOrder.map(key => byKey.get(key)).filter(Boolean);
+  }
+
+  function getRecDisplayTitle_(item) {
+    return String(item && item.title || "추천 플레이리스트").trim() || "추천 플레이리스트";
+  }
+
+  function getRecDisplayThumbnail_(item) {
+    if (!item) return "";
+    const isIdList = item.type === "id_list";
+    return item.thumbnail || (isIdList ? getRecommendedIdListThumbnail_(item.ids) : "") || "";
+  }
+
+  function renderRecTab_(item, displayIndex, virtualIndex) {
+    const safeThumbnail = sanitizeExternalUrl_(getRecDisplayThumbnail_(item));
+    const safeFallbackThumbnail = sanitizeExternalUrl_(item && item.fallbackThumbnail);
+    const title = getRecDisplayTitle_(item);
+    const image = safeThumbnail
+      ? `<img class="cover-tab-image" src="${escapeHtml(safeThumbnail)}" alt="" loading="lazy" decoding="async"${safeFallbackThumbnail ? ` data-fallback="${escapeHtml(safeFallbackThumbnail)}"` : ""} onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" />`
+      : "";
+    return `
+      <button class="cover-tab rec-tab" type="button" role="tab" data-rec-tab-index="${displayIndex}" data-rec-virtual-index="${virtualIndex}" aria-controls="recFeatureVisual" aria-selected="${virtualIndex === recVirtualIndex ? "true" : "false"}" tabindex="${virtualIndex === recVirtualIndex ? "0" : "-1"}" title="${escapeHtml(title)}">
+        <span class="cover-tab-backdrop ${safeThumbnail ? "media-thumb-loading" : ""}" aria-hidden="true">${image}</span>
+        <span class="cover-title cover-tab-title" data-rec-title="${escapeHtml(item.id)}">${escapeHtml(title)}</span>
+      </button>
+    `;
+  }
+
+  function renderRecSection(animate = false) {
     if (!els.recDetails || !els.recTrack) return;
 
-    const count = recItems.length;
+    const displayItems = getRecDisplayItems_();
+    const count = displayItems.length;
     if (els.recDescription) {
       els.recDescription.textContent = count ? `추천 플레이리스트 ${count}개를 표시합니다.` : "표시할 추천 플레이리스트가 없습니다.";
     }
@@ -4724,33 +5629,151 @@
       if (els.recCarousel) els.recCarousel.hidden = true;
       setRecNavHidden(true);
       els.recTrack.innerHTML = "";
+      recTabRenderedOrder = "";
+      if (els.recFeature) {
+        els.recFeature.removeAttribute("href");
+        delete els.recFeature.dataset.recIndex;
+      }
+      if (els.recFeatureImage) els.recFeatureImage.removeAttribute("src");
+      if (els.recFeatureTitle) els.recFeatureTitle.textContent = "";
+      clearRecAutoTimer_();
       return;
     }
 
     if (els.recEmpty) els.recEmpty.hidden = true;
     if (els.recCarousel) els.recCarousel.hidden = false;
     setRecNavHidden(false);
-
     recIndex = wrapIndex(recIndex, count);
-    const visible = getVisibleRecItems();
-    els.recTrack.innerHTML = visible.map(item => renderCarouselMediaCard(item, "rec")).join("");
-    bindRecCards();
-    bindMediaThumbnailLoading_(els.recTrack);
-    enrichRecTitles(visible);
+
+    const displayOrder = displayItems.map(item => item._displayKey).join("\u001e");
+    if (displayOrder !== recTabRenderedOrder) {
+      recVirtualIndex = displayItems.length * 2 + recIndex;
+      els.recTrack.innerHTML = Array.from({ length: 5 }, (_, cycle) =>
+        displayItems.map((item, index) => renderRecTab_(item, index, cycle * displayItems.length + index)).join("")
+      ).join("");
+      recTabRenderedOrder = displayOrder;
+      bindMediaThumbnailLoading_(els.recTrack);
+      syncShowcaseEdgePadding_(els.recTrack);
+    }
+
+    updateRecShowcase_(displayItems, animate);
+    void enrichRecTitles(displayItems);
+    resetRecAutoTimer();
+  }
+
+  function updateRecShowcase_(displayItems = getRecDisplayItems_(), animate = false, options = {}) {
+    if (!displayItems.length) return;
+    recIndex = wrapIndex(recIndex, displayItems.length);
+    const activeItem = displayItems[recIndex];
+    const activeKey = activeItem._displayKey || getRecDisplayKey_(activeItem, activeItem._actualIndex);
+    const title = getRecDisplayTitle_(activeItem);
+    const safeUrl = sanitizeExternalUrl_(activeItem.url, { youtubeOnly: true });
+    const safeThumbnail = sanitizeExternalUrl_(getRecDisplayThumbnail_(activeItem));
+    const safeFallbackThumbnail = sanitizeExternalUrl_(activeItem.fallbackThumbnail);
+
+    if (els.recTrack) {
+      els.recTrack.querySelectorAll("[data-rec-tab-index]").forEach(tab => {
+        const index = Number(tab.dataset.recTabIndex);
+        const virtualIndex = Number(tab.dataset.recVirtualIndex);
+        const isActive = virtualIndex === recVirtualIndex;
+        tab.classList.toggle("active", isActive);
+        tab.setAttribute("aria-selected", isActive ? "true" : "false");
+        tab.tabIndex = isActive ? 0 : -1;
+        const item = displayItems[index];
+        const titleElement = tab.querySelector("[data-rec-title]");
+        if (item && titleElement) setShowcaseScrollingText_(titleElement, getRecDisplayTitle_(item), isActive);
+        if (item) tab.title = getRecDisplayTitle_(item);
+      });
+      if (options.centerTab !== false) {
+        const activeTab = els.recTrack.querySelector(`[data-rec-virtual-index="${recVirtualIndex}"]`);
+        if (activeTab) centerShowcaseTab_(els.recTrack, activeTab, "rec", animate);
+      }
+    }
+
+    if (els.recFeature) {
+      els.recFeature.dataset.recIndex = String(activeItem._actualIndex);
+      els.recFeature.dataset.recType = String(activeItem.type || "");
+      els.recFeature.dataset.playlistSection = "추천 플레이리스트";
+      els.recFeature.dataset.playlistHint = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
+      els.recFeature.title = activeItem.type === "id_list"
+        ? "클릭하면 현재 플레이리스트에 곡을 추가합니다."
+        : "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
+      els.recFeature.setAttribute("aria-label", activeItem.type === "id_list" ? `${title} 현재 플레이리스트에 추가` : `${title} 새 탭에서 열기`);
+      els.recFeature.setAttribute("data-carousel-playlist-kind", "rec");
+      if (activeItem.type === "id_list") {
+        els.recFeature.removeAttribute("href");
+        els.recFeature.setAttribute("role", "button");
+        els.recFeature.removeAttribute("aria-disabled");
+        els.recFeature.tabIndex = 0;
+      } else if (safeUrl) {
+        els.recFeature.href = safeUrl;
+        els.recFeature.setAttribute("role", "link");
+        els.recFeature.removeAttribute("aria-disabled");
+        els.recFeature.tabIndex = 0;
+      } else {
+        els.recFeature.removeAttribute("href");
+        els.recFeature.setAttribute("role", "link");
+        els.recFeature.setAttribute("aria-disabled", "true");
+        els.recFeature.tabIndex = -1;
+      }
+    }
+
+    if (els.recFeatureTitle) {
+      els.recFeatureTitle.dataset.recFeatureTitle = String(activeItem.id || "");
+      setShowcaseScrollingText_(els.recFeatureTitle, title);
+    }
+
+    if (animate && recFeatureActiveKey && activeKey !== recFeatureActiveKey && els.recFeatureVisual) {
+      els.recFeatureVisual.classList.add("is-changing");
+      if (recFeatureAnimationTimer) window.clearTimeout(recFeatureAnimationTimer);
+      recFeatureAnimationTimer = window.setTimeout(() => {
+        if (els.recFeatureVisual) els.recFeatureVisual.classList.remove("is-changing");
+        recFeatureAnimationTimer = null;
+      }, 280);
+    }
+
+    if (els.recFeatureImage) {
+      const currentSrc = els.recFeatureImage.getAttribute("src") || "";
+      const imageWrap = els.recFeatureImage.closest(".cover-feature-image-wrap");
+      if (safeThumbnail && currentSrc !== safeThumbnail) {
+        if (imageWrap) {
+          imageWrap.classList.add("media-thumb-loading");
+          imageWrap.classList.remove("media-thumb-loaded");
+        }
+        els.recFeatureImage.dataset.fallback = safeFallbackThumbnail;
+        els.recFeatureImage.dataset.fallbackUsed = "";
+        els.recFeatureImage.onerror = function () {
+          const fallback = sanitizeExternalUrl_(this.dataset.fallback);
+          if (fallback && !this.dataset.fallbackUsed && this.src !== fallback) {
+            this.dataset.fallbackUsed = "1";
+            this.src = fallback;
+            return;
+          }
+          this.classList.add("is-broken");
+          if (imageWrap) {
+            imageWrap.classList.remove("media-thumb-loading");
+            imageWrap.classList.add("media-thumb-loaded");
+          }
+        };
+        els.recFeatureImage.classList.remove("is-broken");
+        els.recFeatureImage.src = safeThumbnail;
+      } else if (!safeThumbnail) {
+        els.recFeatureImage.removeAttribute("src");
+        els.recFeatureImage.classList.add("is-broken");
+        if (imageWrap) {
+          imageWrap.classList.remove("media-thumb-loading");
+          imageWrap.classList.add("media-thumb-loaded");
+        }
+      }
+      els.recFeatureImage.alt = "";
+      bindMediaThumbnailLoading_(els.recFeatureVisual);
+    }
+    recFeatureActiveKey = activeKey;
   }
 
   function setRecNavHidden(hidden) {
     if (els.recPrevButton) els.recPrevButton.hidden = Boolean(hidden);
     if (els.recNextButton) els.recNextButton.hidden = Boolean(hidden);
-  }
-
-  function getVisibleRecItems() {
-    const count = recItems.length;
-    if (!count) return [];
-    return [-1, 0, 1].map(offset => {
-      const actualIndex = wrapIndex(recIndex + offset, count);
-      return { ...recItems[actualIndex], _actualIndex: actualIndex, _slot: offset };
-    });
   }
 
   function getRecommendedIdListThumbnail_(ids) {
@@ -4773,15 +5796,20 @@
     const titleAttr = kind === "rec" ? "data-rec-title" : "data-cover-title";
     const isIdList = kind === "rec" && item.type === "id_list";
     const displayThumbnail = item.thumbnail || (isIdList ? getRecommendedIdListThumbnail_(item.ids) : "");
-    const thumb = displayThumbnail
-      ? `<img class="cover-thumb" src="${escapeHtml(displayThumbnail)}" alt="" loading="lazy" onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" data-fallback="${escapeHtml(item.fallbackThumbnail || "")}" />`
+    const safeThumbnail = sanitizeExternalUrl_(displayThumbnail);
+    const safeFallbackThumbnail = sanitizeExternalUrl_(item.fallbackThumbnail);
+    const thumb = safeThumbnail
+      ? `<img class="cover-thumb" src="${escapeHtml(safeThumbnail)}" alt="" loading="lazy" decoding="async" onerror="if(this.dataset.fallback&&!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback;}else{this.parentElement.classList.remove('media-thumb-loading');this.parentElement.classList.add('cover-thumb-placeholder');this.remove();}" data-fallback="${escapeHtml(safeFallbackThumbnail)}" />`
       : `<div class="cover-thumb-placeholder-content">${isIdList ? `♫ ${item.ids.length}` : (item.type === "playlist" ? "▶ LIST" : "▶")}</div>`;
-    const thumbClass = displayThumbnail ? "cover-thumb-wrap media-thumb-loading" : "cover-thumb-wrap cover-thumb-placeholder";
+    const thumbClass = safeThumbnail ? "cover-thumb-wrap media-thumb-loading" : "cover-thumb-wrap cover-thumb-placeholder";
     const common = `class="cover-card ${isCenter ? "active" : "side"}" ${indexAttr}="${escapeHtml(item._actualIndex)}"`;
+    const safeUrl = sanitizeExternalUrl_(item.url, { youtubeOnly: true });
     const openTag = isIdList
       ? `<button type="button" ${common} data-rec-id-list="1" title="클릭하면 현재 플레이리스트에 곡을 추가합니다.">`
-      : `<a ${common} href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">`;
-    const closeTag = isIdList ? "</button>" : "</a>";
+      : safeUrl
+        ? `<a ${common} href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">`
+        : `<button type="button" ${common} disabled aria-label="유효하지 않은 영상 주소">`;
+    const closeTag = isIdList || !safeUrl ? "</button>" : "</a>";
 
     return `
       ${openTag}
@@ -4872,55 +5900,72 @@
 
   async function enrichRecTitles(items) {
     const uniqueItems = items.filter(item => item && item.url && (!recItems[item._actualIndex] || recItems[item._actualIndex].title === "추천 플레이리스트를 불러오는 중..."));
+    let changed = false;
     await Promise.all(uniqueItems.map(async item => {
       try {
         const title = await fetchYoutubeOembedTitle(item.url);
-        if (!title) return;
         const target = recItems[item._actualIndex];
-        if (target) target.title = title;
-        if (els.recTrack) {
-          els.recTrack.querySelectorAll(`[data-rec-title="${cssEscape(item.id)}"]`).forEach(el => {
-            el.textContent = title;
-          });
+        if (title && target) {
+          target.title = title;
+          changed = true;
+          if (els.recTrack) {
+            els.recTrack.querySelectorAll(`[data-rec-title="${cssEscape(item.id)}"]`).forEach(el => {
+              const activeTab = Boolean(el.closest(".cover-tab") && el.closest(".cover-tab").classList.contains("active"));
+              setShowcaseScrollingText_(el, title, activeTab);
+            });
+          }
+        } else if (target && target.title === "추천 플레이리스트를 불러오는 중...") {
+          target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 플레이리스트";
+          changed = true;
         }
       } catch (err) {
         const target = recItems[item._actualIndex];
-        if (target && target.title === "추천 플레이리스트를 불러오는 중...") target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 플레이리스트";
+        if (target && target.title === "추천 플레이리스트를 불러오는 중...") {
+          target.title = target.type === "playlist" ? "YouTube 플레이리스트" : "YouTube 추천 플레이리스트";
+          changed = true;
+        }
       }
     }));
+    if (changed) updateRecShowcase_(getRecDisplayItems_(), false, { centerTab: false });
   }
 
   function moveRecCarousel(direction) {
-    if (!recItems.length || recMoving) return;
-    recMoving = true;
-    if (els.recTrack) {
-      els.recTrack.classList.remove("move-left", "move-right");
-      void els.recTrack.offsetWidth;
-      els.recTrack.classList.add(direction > 0 ? "move-left" : "move-right");
-    }
+    const displayItems = getRecDisplayItems_();
+    if (!displayItems.length) return;
+    recVirtualIndex += direction;
+    normalizeShowcaseVirtualIndex_("rec", els.recTrack, displayItems.length);
+    recIndex = wrapIndex(recVirtualIndex, displayItems.length);
+    renderRecSection(true);
+    resetRecAutoTimer();
+  }
 
-    window.setTimeout(() => {
-      recIndex = wrapIndex(recIndex + direction, recItems.length);
-      if (els.recTrack) els.recTrack.classList.remove("move-left", "move-right");
-      recMoving = false;
-      renderRecSection();
-    }, 260);
+  function clearRecAutoTimer_() {
+    if (recAutoTimer) {
+      window.clearTimeout(recAutoTimer);
+      recAutoTimer = null;
+    }
   }
 
   function startRecAutoTimer() {
-    if (recAutoTimer) window.clearInterval(recAutoTimer);
-    recAutoTimer = window.setInterval(() => {
-      if (!shouldAutoMoveRec()) return;
-      moveRecCarousel(-1);
-    }, 10000);
+    resetRecAutoTimer();
+  }
+
+  function resetRecAutoTimer() {
+    clearRecAutoTimer_();
+    if (recHover || !els.recDetails || !els.recDetails.open) return;
+    if (!els.recCarousel || els.recCarousel.hidden || getRecDisplayItems_().length <= 1) return;
+    recAutoTimer = window.setTimeout(() => {
+      recAutoTimer = null;
+      if (shouldAutoMoveRec()) moveRecCarousel(1);
+      else resetRecAutoTimer();
+    }, 15000);
   }
 
   function shouldAutoMoveRec() {
     if (!els.recDetails || !els.recDetails.open) return false;
     if (!els.recCarousel || els.recCarousel.hidden) return false;
-    if (recHover || recMoving) return false;
-    if (recItems.length <= 1) return false;
-    return isElementFullyVisible(els.recDetails);
+    if (recHover || getRecDisplayItems_().length <= 1) return false;
+    return true;
   }
 
   function getChannelBorderStyle_(id) {
@@ -4977,6 +6022,9 @@
 
   function renderChannelCard_(item) {
     const isCenter = item._slot === 0;
+    const safeUrl = sanitizeExternalUrl_(item.url, { youtubeOnly: true });
+    const safeThumbnail = sanitizeExternalUrl_(item.thumbnail);
+    if (!safeUrl) return "";
     const borderStyle = getChannelBorderStyle_(item.id);
     const hasCustomName = Boolean(item.customName);
     const primaryOfficialHtml = item.official && !hasCustomName
@@ -4990,9 +6038,9 @@
       ? `<div class="cover-title channel-cover-title" data-channel-title="${escapeHtml(item.id)}"><div class="channel-title-primary">${escapeHtml(item.title)}${primaryOfficialHtml}</div>${metaHtml}</div>`
       : `<div class="cover-title" data-channel-title="${escapeHtml(item.id)}">${escapeHtml(item.title)}</div>`;
     return `
-      <a class="cover-card channel-card ${isCenter ? "active" : "side"}" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" data-channel-index="${escapeHtml(item._actualIndex)}">
+      <a class="cover-card channel-card ${isCenter ? "active" : "side"}" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" data-channel-index="${escapeHtml(item._actualIndex)}">
         <div class="cover-thumb-wrap channel-thumb-wrap media-thumb-loading" style="${escapeHtml(borderStyle)}">
-          <img class="cover-thumb channel-thumb" src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy" onerror="if(!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src='https://www.google.com/s2/favicons?domain=youtube.com&sz=128';}else{this.parentElement.classList.remove('media-thumb-loading');this.remove();}" />
+          <img class="cover-thumb channel-thumb" src="${escapeHtml(safeThumbnail)}" alt="" loading="lazy" decoding="async" onerror="if(!this.dataset.fallbackUsed){this.dataset.fallbackUsed='1';this.src='https://www.google.com/s2/favicons?domain=youtube.com&sz=128';}else{this.parentElement.classList.remove('media-thumb-loading');this.remove();}" />
         </div>
         ${titleHtml}
       </a>
@@ -5056,7 +6104,11 @@
   function bindCarouselPlaylistAddCards_(root, fallbackKind) {
     if (!root) return;
 
-    root.querySelectorAll(".cover-card[data-carousel-playlist-kind]").forEach(card => {
+    const cardSelector = ".cover-card[data-carousel-playlist-kind], .cover-feature[data-carousel-playlist-kind]";
+    const cards = [];
+    if (root.matches && root.matches(cardSelector)) cards.push(root);
+    root.querySelectorAll(cardSelector).forEach(card => cards.push(card));
+    cards.forEach(card => {
       let longPressTimer = null;
       let longPressTriggered = false;
 
@@ -5125,6 +6177,14 @@
         title: exactTitle,
         section: cover.section || "커버곡"
       };
+    } else if (kind === "rec") {
+      const index = Number(card && card.dataset && card.dataset.recIndex);
+      const recommended = Number.isInteger(index) ? recItems[index] : null;
+      if (recommended && recommended.type === "id_list") {
+        await addRecommendedIdsToCurrentPlaylist_(recommended);
+        return;
+      }
+      entry = makeExternalPlaylistEntryFromCard_(card, kind);
     } else {
       entry = makeExternalPlaylistEntryFromCard_(card, kind);
     }
@@ -5219,7 +6279,93 @@
 
   function updateFilterSummaryHelp() {
     if (!els.filterSummaryHelp) return;
-    els.filterSummaryHelp.textContent = els.filterDetails && els.filterDetails.open ? "클릭해서 접기" : "클릭해서 펼치기";
+    const expanded = Boolean(els.filterDetails && els.filterDetails.open);
+    els.filterSummaryHelp.setAttribute("aria-expanded", expanded ? "true" : "false");
+    els.filterSummaryHelp.setAttribute("aria-label", expanded ? "필터 접기" : "필터 펼치기");
+    els.filterSummaryHelp.title = expanded ? "필터 접기" : "필터 펼치기";
+  }
+
+  function setFilterDetailsOpen_(open) {
+    if (!els.filterDetails) return;
+    const shouldOpen = Boolean(open);
+    if (!shouldOpen && els.filterDetails.classList.contains("is-closing")) return;
+    window.clearTimeout(filterCloseAnimationTimer);
+    filterCloseAnimationTimer = null;
+
+    if (shouldOpen) {
+      els.filterDetails.classList.remove("is-closing");
+      els.filterDetails.open = true;
+      updateFilterSummaryHelp();
+      setStatusBoxExpanded_(false);
+      return;
+    }
+
+    if (!els.filterDetails.open) {
+      els.filterDetails.classList.remove("is-closing");
+      updateFilterSummaryHelp();
+      return;
+    }
+
+    els.filterDetails.classList.add("is-closing");
+    updateFilterSummaryHelp();
+    filterCloseAnimationTimer = window.setTimeout(() => {
+      if (els.filterDetails) {
+        els.filterDetails.open = false;
+        els.filterDetails.classList.remove("is-closing");
+      }
+      filterCloseAnimationTimer = null;
+      updateFilterSummaryHelp();
+    }, 240);
+  }
+
+  function fitStatusBoxToHeader_() {
+    if (!els.statusBox || !els.statusBox.classList.contains("is-expanded") || !els.statusBoxContent) return;
+    const headerMain = document.querySelector(".header-main");
+    const toggle = els.statusToggleButton;
+    if (!headerMain || !toggle) return;
+
+    const headerRect = headerMain.getBoundingClientRect();
+    const titleRect = headerMain.querySelector("h1")?.getBoundingClientRect();
+    const filterRect = els.filterToggleButton?.getBoundingClientRect();
+    const headerActions = headerMain.querySelector(".header-actions");
+    const headerGap = Number.parseFloat(getComputedStyle(headerMain).columnGap) || 8;
+    const actionsGap = headerActions ? (Number.parseFloat(getComputedStyle(headerActions).columnGap) || 8) : 8;
+    const minNoticeWidth = window.matchMedia("(max-width: 720px)").matches ? 24 : 100;
+    const titleWidth = titleRect ? titleRect.width : 0;
+    const filterWidth = filterRect ? filterRect.width : 42;
+    // Keep enough space for the title, a visible notice sliver, the filter button and both grid gaps.
+    const availableWidth = Math.max(42, Math.floor(
+      headerRect.width - titleWidth - minNoticeWidth - filterWidth - actionsGap - (headerGap * 2)
+    ));
+    els.statusBox.style.setProperty("--status-box-max-width", `${availableWidth}px`);
+
+    const contentWidth = Math.ceil(els.statusBoxContent.getBoundingClientRect().width);
+    const desiredWidth = Math.min(availableWidth, Math.max(42, contentWidth + 58));
+    const currentWidth = Math.round(els.statusBox.getBoundingClientRect().width);
+    if (Math.abs(currentWidth - desiredWidth) > 1) {
+      els.statusBox.style.width = `${desiredWidth}px`;
+      els.statusBox.style.flexBasis = `${desiredWidth}px`;
+    }
+  }
+
+  function setStatusBoxExpanded_(expanded) {
+    if (!els.statusBox) return;
+    const isExpanded = Boolean(expanded);
+    els.statusBox.classList.toggle("is-expanded", isExpanded);
+    els.statusBox.classList.toggle("is-collapsed", !isExpanded);
+    if (els.statusToggleButton) {
+      els.statusToggleButton.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      els.statusToggleButton.setAttribute("aria-label", isExpanded ? "상태 정보 접기" : "상태 정보 펼치기");
+      els.statusToggleButton.title = isExpanded ? "상태 정보 접기" : "상태 정보 펼치기";
+    }
+    if (isExpanded) {
+      window.requestAnimationFrame(fitStatusBoxToHeader_);
+      if (els.filterDetails && els.filterDetails.open) setFilterDetailsOpen_(false);
+    } else {
+      els.statusBox.style.width = "";
+      els.statusBox.style.flexBasis = "";
+      els.statusBox.style.removeProperty("--status-box-max-width");
+    }
   }
 
   function renderFooter() {
@@ -5245,8 +6391,10 @@
 
       if (match[1] !== undefined) {
         const label = match[1];
-        const url = match[2];
-        html += `<a class="footer-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
+        const url = sanitizeExternalUrl_(match[2]);
+        html += url
+          ? `<a class="footer-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+          : escapeHtml(label);
       } else {
         const label = match[3];
         const tooltip = String(match[4] || "").replace(/\\n/g, "\n");
@@ -7004,6 +8152,9 @@
 
     const playbackList = { ...selected, items: validItems };
     const repeat = els.playlistRepeatToggle ? els.playlistRepeatToggle.dataset.repeat === "1" : false;
+    clearNormalPlaybackMonitor_();
+    normalPlaybackFadeState = null;
+    normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false };
     playlistPlayback = {
       active: true,
       list: playbackList,
@@ -7401,6 +8552,63 @@
     setPlaylistVolumeImmediately_(0);
   }
 
+  function isDesktopPointerEnvironment_() {
+    try {
+      return typeof window.matchMedia === "function" && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    } catch {
+      return false;
+    }
+  }
+
+  function seekPlaylistSegmentByTenSeconds_(direction) {
+    return seekPlaylistSegmentBySeconds_(direction, 10);
+  }
+
+  function seekPlaylistSegmentBySeconds_(direction, seconds) {
+    if (!youtubePlayer || typeof youtubePlayer.getCurrentTime !== "function" || typeof youtubePlayer.seekTo !== "function") return;
+    let currentTime = 0;
+    try { currentTime = Number(youtubePlayer.getCurrentTime() || 0); } catch { return; }
+    if (!Number.isFinite(currentTime) || currentTime < 0) return;
+
+    const seekSeconds = Math.max(1, Math.floor(Number(seconds) || 10));
+    const isTenSecondSeek = seekSeconds === 10;
+    const playlistHasSegment = Boolean(playlistPlayback && playlistPlayback.active && Number.isFinite(Number(playlistPlayback.currentEnd)) && Number(playlistPlayback.currentEnd) > Number(playlistPlayback.currentStart));
+    const normalHasSegment = Boolean(!(playlistPlayback && playlistPlayback.active) && normalPlaybackSegment && normalPlaybackSegment.hasSegment);
+    const normalHasStart = Boolean(!(playlistPlayback && playlistPlayback.active) && normalPlaybackSegment && normalPlaybackSegment.hasStart);
+    const segmentStart = playlistHasSegment
+      ? Math.max(0, Number(playlistPlayback.currentStart) || 0)
+      : (normalHasStart ? Math.max(0, Number(normalPlaybackSegment.start) || 0) : 0);
+    let mediaDuration = 0;
+    try { mediaDuration = Number(youtubePlayer.getDuration && youtubePlayer.getDuration()) || 0; } catch {}
+    const durationKnown = Number.isFinite(mediaDuration) && mediaDuration > 0;
+    const segmentEnd = playlistHasSegment
+      ? Number(playlistPlayback.currentEnd)
+      : (normalHasSegment ? Number(normalPlaybackSegment.end) : (durationKnown ? mediaDuration : Infinity));
+    const elapsed = Math.max(0, currentTime - segmentStart);
+    const remaining = Number.isFinite(segmentEnd) ? segmentEnd - currentTime : Infinity;
+
+    let targetTime;
+    if (direction < 0) {
+      // 10초 역방향은 시작점과 10초 이하의 구간에서는 시작점으로 돌아갑니다.
+      // PC 우클릭 30초 역방향은 현재 시점에서 30초를 뺍니다.
+      targetTime = isTenSecondSeek && elapsed <= 10 ? segmentStart : currentTime - seekSeconds;
+      targetTime = Math.max(segmentStart, targetTime);
+    } else {
+      // 좌클릭 10초 이동은 표시상 -00:15 ~ -00:00이면 무시합니다.
+      if (isTenSecondSeek && Number.isFinite(remaining) && Math.floor(Math.max(0, remaining)) <= 15) return;
+      // PC 우클릭 30초 이동은 남은 시간이 35초 이하면 무시합니다.
+      if (seekSeconds >= 30 && Number.isFinite(remaining) && Math.floor(Math.max(0, remaining)) <= 35) return;
+      targetTime = Math.min(segmentEnd, currentTime + seekSeconds);
+    }
+
+    try {
+      youtubePlayer.seekTo(Math.max(0, targetTime), true);
+      updateYoutubePlaybackProgress_(targetTime, durationKnown ? mediaDuration : null);
+    } catch (err) {
+      console.warn("YouTube 구간 이동 실패", err);
+    }
+  }
+
   function formatPlaylistProgressTime_(seconds, negative = false) {
     const total = Math.max(0, Math.floor(Number(seconds) || 0));
     const hours = Math.floor(total / 3600);
@@ -7430,7 +8638,7 @@
       els.modalSongInfoTop.style.removeProperty("--playlist-segment-progress");
     }
     if (!els.youtubeFrameWrap) return;
-    els.youtubeFrameWrap.classList.remove("playlist-segment-progress-enabled");
+    els.youtubeFrameWrap.classList.remove("playlist-segment-progress-enabled", "youtube-playback-progress-enabled");
     const currentEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
     const remainingEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
     if (currentEl) currentEl.textContent = "00:00";
@@ -7438,34 +8646,77 @@
   }
 
   function updatePlaylistSegmentProgress_(currentTime) {
-    if (!isDesktopTabTitleEnvironment_() || !playlistPlayback || !playlistPlayback.active) {
-      resetPlaylistSegmentProgress_();
+    updateYoutubePlaybackProgress_(currentTime);
+  }
+
+  function updateYoutubePlaybackProgress_(currentTime, durationHint = null) {
+    const isPlaylistSegment = Boolean(playlistPlayback && playlistPlayback.active);
+    const normalSegment = normalPlaybackSegment || { start: 0, end: null, hasSegment: false };
+    let mediaDuration = Number(durationHint);
+    if (!Number.isFinite(mediaDuration) || mediaDuration <= 0) {
+      try { mediaDuration = Number(youtubePlayer && youtubePlayer.getDuration && youtubePlayer.getDuration()) || 0; } catch { mediaDuration = 0; }
+    }
+    if (!Number.isFinite(mediaDuration) || mediaDuration <= 0 || !Number.isFinite(Number(currentTime))) {
+      disableYoutubeTitleProgress_();
       return;
     }
 
-    const start = Number(playlistPlayback.currentStart);
-    const end = Number(playlistPlayback.currentEnd);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-      resetPlaylistSegmentProgress_();
-      return;
+    let duration = mediaDuration;
+    let elapsed = Math.max(0, Math.min(mediaDuration, Number(currentTime) || 0));
+    let remaining = Math.max(0, mediaDuration - elapsed);
+    let hasSegmentProgress = false;
+
+    if (isPlaylistSegment) {
+      const start = Number(playlistPlayback.currentStart);
+      const end = Number(playlistPlayback.currentEnd);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        disableYoutubeTitleProgress_();
+        return;
+      }
+      duration = end - start;
+      elapsed = Math.max(0, Math.min(duration, Number(currentTime) - start));
+      remaining = Math.max(0, duration - elapsed);
+      hasSegmentProgress = true;
+    } else if (normalSegment.hasSegment) {
+      const start = Number(normalSegment.start);
+      const end = Number(normalSegment.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+        duration = end - start;
+        elapsed = Math.max(0, Math.min(duration, Number(currentTime) - start));
+        remaining = Math.max(0, duration - elapsed);
+        hasSegmentProgress = true;
+      }
     }
 
-    const duration = end - start;
-    const elapsed = Math.max(0, Math.min(duration, Number(currentTime) - start));
-    const remaining = Math.max(0, duration - elapsed);
-    const progress = duration > 0 ? Math.max(0, Math.min(100, elapsed / duration * 100)) : 0;
-
-    if (els.modalSongInfoTop) {
+    // The clock buttons remain useful in ordinary full-video playback, but the title
+    // progress fill is shown only on desktop and only for playlist segments or when
+    // both song timeline/end fields define a valid segment.
+    const showTitleProgress = isDesktopTabTitleEnvironment_() && hasSegmentProgress;
+    if (showTitleProgress && els.modalSongInfoTop) {
+      const progress = duration > 0 ? Math.max(0, Math.min(100, elapsed / duration * 100)) : 0;
       els.modalSongInfoTop.classList.add("playlist-segment-progress-active");
       els.modalSongInfoTop.style.setProperty("--playlist-segment-progress", `${progress.toFixed(3)}%`);
+    } else {
+      disableYoutubeTitleProgress_();
     }
 
-    if (!els.youtubeFrameWrap) return;
-    els.youtubeFrameWrap.classList.add("playlist-segment-progress-enabled");
-    const currentEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
-    const remainingEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
-    if (currentEl) currentEl.textContent = formatPlaylistProgressTime_(elapsed);
-    if (remainingEl) remainingEl.textContent = formatPlaylistProgressTime_(remaining, true);
+    if (els.youtubeFrameWrap) {
+      const desktopControlsAvailable = isDesktopTabTitleEnvironment_() && Boolean(
+        isPlaylistSegment || normalPlaybackFadeState
+      );
+      els.youtubeFrameWrap.classList.toggle("youtube-playback-progress-enabled", desktopControlsAvailable);
+      els.youtubeFrameWrap.classList.toggle("playlist-segment-progress-enabled", isDesktopTabTitleEnvironment_() && isPlaylistSegment);
+      const currentEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
+      const remainingEl = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
+      if (currentEl) currentEl.textContent = formatPlaylistProgressTime_(elapsed);
+      if (remainingEl) remainingEl.textContent = formatPlaylistProgressTime_(remaining, true);
+    }
+  }
+
+  function disableYoutubeTitleProgress_() {
+    if (!els.modalSongInfoTop) return;
+    els.modalSongInfoTop.classList.remove("playlist-segment-progress-active");
+    els.modalSongInfoTop.style.removeProperty("--playlist-segment-progress");
   }
 
   function startPlaylistSegmentWatcher_() {
@@ -7503,6 +8754,86 @@
         }
       }
     }, PLAYLIST_END_CHECK_INTERVAL_MS);
+  }
+
+  function handleNormalPlaybackPlaying_(token) {
+    const state = normalPlaybackFadeState;
+    if (!state || state.token !== token || playlistPlayback && playlistPlayback.active) return;
+    if (state.phase === "normal" || state.phase === "fading-in" || state.phase === "ending" || state.phase === "ended") {
+      startNormalPlaybackMonitor_(token);
+      return;
+    }
+
+    clearPlaylistVolumeFade_();
+    state.phase = "fading-in";
+    state.endFadeStarted = false;
+    const targetVolume = Math.max(0, Math.min(100, Number(state.targetVolume) || 0));
+    if (targetVolume <= 0) {
+      state.phase = "normal";
+      startNormalPlaybackMonitor_(token);
+      return;
+    }
+
+    preparePlaylistPlayerForFadeStart_(youtubePlayer);
+    runPlaylistVolumeFade_(0, targetVolume, PLAYLIST_FADE_DURATION_MS, t => 1 - Math.pow(1 - t, 3), () => {
+      if (!normalPlaybackFadeState || normalPlaybackFadeState.token !== token) return;
+      normalPlaybackFadeState.phase = "normal";
+      startNormalPlaybackMonitor_(token);
+    }, { muteUntilAudible: true });
+    startNormalPlaybackMonitor_(token);
+  }
+
+  function startNormalPlaybackMonitor_(token) {
+    clearNormalPlaybackMonitor_();
+    if (!normalPlaybackFadeState || normalPlaybackFadeState.token !== token || playlistPlayback && playlistPlayback.active) return;
+    normalPlaybackMonitorTimer = window.setInterval(() => {
+      const state = normalPlaybackFadeState;
+      if (!state || state.token !== token || !youtubePlayer || !youtubeIsPlaying || playlistPlayback && playlistPlayback.active) {
+        clearNormalPlaybackMonitor_();
+        return;
+      }
+
+      let duration = 0;
+      let currentTime = 0;
+      try {
+        duration = Number(youtubePlayer.getDuration && youtubePlayer.getDuration()) || 0;
+        currentTime = Number(youtubePlayer.getCurrentTime && youtubePlayer.getCurrentTime()) || 0;
+      } catch { return; }
+      if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime) || currentTime < 0) return;
+
+      updateYoutubePlaybackProgress_(currentTime, duration);
+      const remaining = duration - currentTime;
+      if (state.phase === "normal") {
+        const observedVolume = getPlaylistCurrentVolume_(state.targetVolume);
+        const recentlyAutomated = performance.now() - playlistLastAutomatedVolumeAt < PLAYLIST_VOLUME_MONITOR_INTERVAL_MS * 2;
+        if (!recentlyAutomated && Math.abs(observedVolume - state.targetVolume) >= PLAYLIST_VOLUME_USER_CHANGE_THRESHOLD) {
+          state.targetVolume = observedVolume;
+        }
+      }
+      if (remaining > PLAYLIST_FADE_DURATION_MS / 1000 + 0.25 && state.phase === "ending") {
+        clearPlaylistVolumeFade_();
+        state.phase = "normal";
+        state.endFadeStarted = false;
+        setPlaylistVolumeImmediately_(state.targetVolume);
+        return;
+      }
+      if (remaining > 0 && remaining <= PLAYLIST_FADE_DURATION_MS / 1000 && !state.endFadeStarted) {
+        state.endFadeStarted = true;
+        state.phase = "ending";
+        const from = getPlaylistCurrentVolume_(state.targetVolume);
+        runPlaylistVolumeFade_(from, 0, Math.max(120, Math.min(PLAYLIST_FADE_DURATION_MS, remaining * 1000)), t => t, () => {
+          if (normalPlaybackFadeState && normalPlaybackFadeState.token === token) normalPlaybackFadeState.phase = "ended";
+          clearNormalPlaybackMonitor_();
+        });
+      }
+    }, 180);
+  }
+
+  function clearNormalPlaybackMonitor_() {
+    if (normalPlaybackMonitorTimer) {
+      window.clearInterval(normalPlaybackMonitorTimer);
+      normalPlaybackMonitorTimer = null;
+    }
   }
 
   function startPlaylistVolumeFadeIn_(targetVolume, onDone) {
@@ -7615,6 +8946,7 @@
     selectAllOption(els.dayFilter);
     selectAllOption(els.categoryFilter);
     selectAllOption(els.countryFilter);
+    updateFilterToggleButtonState_();
   }
 
   function isEditableTarget(target) {
@@ -7983,6 +9315,7 @@
 
     if (!formatted) {
       els.dataStatus.textContent = String(currentDataStatusText || "");
+      if (els.statusBox && els.statusBox.classList.contains("is-expanded")) window.requestAnimationFrame(fitStatusBoxToHeader_);
       return;
     }
 
@@ -7995,6 +9328,7 @@
     if (formatted.suffix) {
       els.dataStatus.appendChild(document.createTextNode(formatted.suffix));
     }
+    if (els.statusBox && els.statusBox.classList.contains("is-expanded")) window.requestAnimationFrame(fitStatusBoxToHeader_);
   }
 
   function formatDataStatusParts(text) {
@@ -8071,7 +9405,7 @@
   }
 
   function setupDarkModeToggle() {
-    const statusBox = document.querySelector(".status-box");
+    const statusBox = els.statusBoxContent;
     if (!statusBox) return;
 
     const wrap = document.createElement("label");
