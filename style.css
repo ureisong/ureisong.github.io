@@ -755,15 +755,17 @@ html.dark-mode .like-button.liking {
   display: inline-flex;
   align-items: center;
   width: max-content;
-  animation: noticeMarquee 38s linear infinite;
+  animation: noticeMarquee var(--notice-marquee-duration, 38s) linear infinite;
+  will-change: transform;
 }
 
 .notice-content {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  min-width: 100vw;
-  padding-right: 10vw;
+  width: max-content;
+  min-width: 0;
+  padding-right: 0;
 }
 
 .notice-marquee strong {

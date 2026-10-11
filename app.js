@@ -27,6 +27,7 @@
   const SETTINGS_CSV_URL = CONFIG.SETTINGS_CSV_URL || "";
   const SEARCH_ALIASES_CSV_URL = CONFIG.SEARCH_ALIASES_CSV_URL || "";
   const SONGBOOK_CSV_URL = CONFIG.SONGBOOK_CSV_URL || "";
+  const NOTICE_SPEED_PX_PER_SECOND = Math.max(1, Number(CONFIG.NOTICE_SPEED_PX_PER_SECOND || 30));
   const CSV_CACHE_PREFIX = "csv_cache_";
   const SONGS_CSV_CACHE_NAME = "songs_title_artist";
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
@@ -68,6 +69,8 @@
   const DATE_RECOMMEND_INITIAL_GROUPS = 5;
   const DATE_RECOMMEND_MORE_STEP = 5;
   const SUNG_INITIAL_GROUP_COUNT = 50;
+  const FILTER_DATE_GROUP_LIMIT = 5;
+  const FILTER_SUNG_GROUP_LIMIT = 10;
   const SUNG_MORE_STEP = 50;
   const PLAYLIST_STORAGE_KEY = "urei_playlists";
   const PLAYLIST_SELECTED_KEY = "urei_selected_playlist";
@@ -278,6 +281,7 @@
   let recommendVisibleCount = RECOMMEND_LIMITS.random;
   let randomPoolIds = [];
   let dateVisibleDateCount = 1;
+  let preventDateAutoFill = false;
   let dateSortMode = "desc";
   let sungMode = "song";
   let sungSortAscending = false;
@@ -333,6 +337,9 @@
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
+  let currentNoticeLineHtml = "";
+  let noticeLayoutRaf = 0;
+  let noticeResizeObserver = null;
   let currentFooterText = FOOTER_TEXT;
   let playlistEnabled = false;
   let pendingPlaylistNameAction = "";
@@ -490,6 +497,7 @@
       if (els.statusBox && els.statusBox.classList.contains("is-expanded")) {
         window.requestAnimationFrame(fitStatusBoxToHeader_);
       }
+      scheduleNoticeMarqueeLayout_();
     }, { passive: true });
     document.addEventListener("click", event => {
       const target = event.target;
@@ -536,18 +544,37 @@
 
     els.resetButton.addEventListener("click", () => {
       if (!hasActiveFilterValues_()) {
+        if (searchRenderTimer) {
+          window.clearTimeout(searchRenderTimer);
+          searchRenderTimer = null;
+        }
+        resetFilters();
+        applyAndRender(true);
         setFilterDetailsOpen_(false);
+        applyEscResultPanelState();
+        scrollToRecommendSection();
         return;
       }
       resetFilters();
-      applyFilterResultPanelState();
       applyAndRender(true);
+      collapseAllContentSectionsForFilter_();
     });
 
+
+    if (els.dateDetails) {
+      els.dateDetails.addEventListener("toggle", () => {
+        if (els.dateDetails.open) return;
+        dateSortMode = "desc";
+        dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
+        setActiveModeButton("data-date-sort", dateSortMode);
+        renderDateSection();
+      });
+    }
 
     document.querySelectorAll("[data-date-sort]").forEach(button => {
       button.addEventListener("click", () => {
         dateSortMode = button.dataset.dateSort || "desc";
+        preventDateAutoFill = false;
         dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
         document.querySelectorAll("[data-date-sort]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
@@ -577,20 +604,16 @@
     });
 
     els.dateMoreButton.addEventListener("click", () => {
+      preventDateAutoFill = true;
       const groups = getDateGroupsBySortMode(filteredSongs);
       const previousCount = Math.min(dateVisibleDateCount, groups.length);
-      if (dateSortMode === "desc" || dateSortMode === "asc") {
-        const nextCount = Math.min(groups.length, previousCount + 3);
-        groups.slice(previousCount, nextCount).forEach(group => {
-          setGroupCollapsed("date", group.key, true);
-        });
-        dateVisibleDateCount = nextCount;
-      } else {
-        dateVisibleDateCount = Math.min(
-          groups.length,
-          dateVisibleDateCount + getDateMoreStep(dateSortMode)
-        );
-      }
+      const nextCount = dateSortMode === "desc" || dateSortMode === "asc"
+        ? Math.min(groups.length, previousCount + 3)
+        : Math.min(groups.length, previousCount + getDateMoreStep(dateSortMode));
+      groups.slice(previousCount, nextCount).forEach(group => {
+        setGroupCollapsed("date", group.key, true);
+      });
+      dateVisibleDateCount = nextCount;
       renderDateSection();
     });
 
@@ -614,11 +637,10 @@
         if (els.sungDetails.open) {
           const isFilterDrivenOpen = suppressSungOpenSideEffects_;
           suppressSungOpenSideEffects_ = false;
-          if (!isFilterDrivenOpen) setFilterDetailsOpen_(false);
-          if (els.recommendDetails) els.recommendDetails.open = false;
-          if (els.dateDetails) els.dateDetails.open = false;
-
           if (!isFilterDrivenOpen) {
+            setFilterDetailsOpen_(false);
+            if (els.recommendDetails) els.recommendDetails.open = false;
+            if (els.dateDetails) els.dateDetails.open = false;
             scrollElementBelowStickyHeader_(els.sungDetails, { behavior: "smooth", offset: 10 });
           }
         } else {
@@ -934,9 +956,13 @@
 
       if (key === "Escape") {
         if (!els.youtubeModal.hidden) closeYoutubeModal();
+        if (searchRenderTimer) {
+          window.clearTimeout(searchRenderTimer);
+          searchRenderTimer = null;
+        }
         resetFilters();
-        applyEscResultPanelState();
         applyAndRender(true);
+        applyEscResultPanelState();
         scrollToRecommendSection();
         return;
       }
@@ -1672,9 +1698,12 @@
 
     if (options.syncSungForFilters === true) {
       if (hasActiveFilterValues_()) {
+        collapseSectionsForActiveFilter_();
+        syncDateSectionForFilterResults_();
         syncSungSectionForFilterResults_();
-      } else if (els.sungDetails) {
-        els.sungDetails.open = false;
+      } else {
+        if (els.sungDetails) els.sungDetails.open = false;
+        if (els.filterDetails && els.filterDetails.open) collapseAllContentSectionsForFilter_();
       }
     }
 
@@ -1780,7 +1809,7 @@
       return;
     }
 
-    if (dateSortMode !== "likes_total") {
+    if (dateSortMode !== "likes_total" && !preventDateAutoFill) {
       let renderedCount = visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
 
       if (renderedCount < DATE_INITIAL_COUNT && dateVisibleDateCount < groups.length) {
@@ -2009,8 +2038,18 @@
     }
   }
 
+  function stripModalActionMarkers_(value) {
+    return String(value || "")
+      .replaceAll(" 🐤", "")
+      .replaceAll("🐤", "")
+      .replaceAll(" 🍥", "")
+      .replaceAll("🍥", "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
   function getModalInfoText_(el) {
-    return String(el && (el.dataset.copyText || el.textContent) || "").trim();
+    return stripModalActionMarkers_(el && (el.dataset.copyText || el.textContent) || "");
   }
 
   async function copyModalInfoText_(el) {
@@ -2039,13 +2078,13 @@
 
   function getModalArtistFilterValueFromTarget_(target) {
     const part = target && target.closest && target.closest("[data-modal-filter-value]");
-    return part ? String(part.dataset.modalFilterValue || "").trim() : "";
+    return part ? stripModalActionMarkers_(part.dataset.modalFilterValue || "") : "";
   }
 
   function getModalArtistFilterValues_(text) {
-    return String(text || "")
+    return stripModalActionMarkers_(text)
       .split(/\s+&\s+/)
-      .map(value => value.trim())
+      .map(value => stripModalActionMarkers_(value))
       .filter(Boolean);
   }
 
@@ -2240,21 +2279,40 @@
     });
   }
 
-  function syncSungSectionForFilterResults_() {
+  function syncDateSectionForFilterResults_() {
     if (!hasActiveFilterValues_()) return false;
+
+    if (els.dateDetails) els.dateDetails.open = true;
+    dateSortMode = "likes_total";
+    setActiveModeButton("data-date-sort", dateSortMode);
+
+    const groups = getDateGroupsBySortMode(filteredSongs);
+    dateVisibleDateCount = Math.min(FILTER_DATE_GROUP_LIMIT, groups.length);
+    groups.slice(0, FILTER_DATE_GROUP_LIMIT).forEach(group => {
+      setGroupCollapsed("date", group.key, false);
+    });
+    return true;
+  }
+
+  function syncSungSectionForFilterResults_() {
+    if (!hasActiveFilterValues_()) {
+      if (els.sungDetails) els.sungDetails.open = false;
+      return false;
+    }
 
     const songGroups = groupBySung(filteredSongs, "song", getFilteredSongbookOnlyItems_("song"));
     const artistGroups = groupBySung(filteredSongs, "artist", []);
     const nextMode = songGroups.length ? "song" : artistGroups.length ? "artist" : "";
+    const selectedGroups = nextMode === "song" ? songGroups : nextMode === "artist" ? artistGroups : [];
 
-    if (!nextMode) {
+    if (!nextMode || !selectedGroups.length) {
       if (els.sungDetails) els.sungDetails.open = false;
       return false;
     }
 
     sungMode = nextMode;
     sungSortAscending = false;
-    sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+    sungVisibleGroupCount = Math.min(FILTER_SUNG_GROUP_LIMIT, selectedGroups.length);
     [...songGroups, ...artistGroups].forEach(group => setGroupCollapsed("sung", group.key, true));
     updateSungModeButtons_();
     if (els.sungDetails && !els.sungDetails.open) {
@@ -2334,7 +2392,14 @@
     if (!button) return;
 
     button.addEventListener("click", () => {
-      sungVisibleGroupCount += SUNG_MORE_STEP;
+      const songbookItems = sungMode === "song" ? getFilteredSongbookOnlyItems_() : [];
+      const groups = groupBySung(filteredSongs, sungMode, songbookItems);
+      const previousCount = Math.min(sungVisibleGroupCount, groups.length);
+      const nextCount = Math.min(groups.length, previousCount + SUNG_MORE_STEP);
+      groups.slice(previousCount, nextCount).forEach(group => {
+        setGroupCollapsed("sung", group.key, true);
+      });
+      sungVisibleGroupCount = nextCount;
       renderSungSection();
     });
   }
@@ -2738,10 +2803,18 @@
     scrollToFilterSection();
   }
 
-  function collapseNonDateSections() {
+  function collapseAllContentSectionsForFilter_() {
     if (els.coverDetails) els.coverDetails.open = false;
     if (els.recommendDetails) els.recommendDetails.open = false;
+    if (els.dateDetails) els.dateDetails.open = false;
     if (els.sungDetails) els.sungDetails.open = false;
+    if (els.recDetails) els.recDetails.open = false;
+    if (els.channelDetails) els.channelDetails.open = false;
+  }
+
+  function collapseSectionsForActiveFilter_() {
+    if (els.coverDetails) els.coverDetails.open = false;
+    if (els.recommendDetails) els.recommendDetails.open = false;
     if (els.recDetails) els.recDetails.open = false;
     if (els.channelDetails) els.channelDetails.open = false;
     if (els.dateDetails) els.dateDetails.open = true;
@@ -2771,17 +2844,9 @@
     }
   }
 
-  function applyFilterResultPanelState(options = {}) {
+  function applyFilterResultPanelState() {
     updateFilterToggleButtonState_();
-    if (options.preserveSung) {
-      if (els.coverDetails) els.coverDetails.open = false;
-      if (els.recommendDetails) els.recommendDetails.open = false;
-      if (els.dateDetails) els.dateDetails.open = true;
-      if (els.recDetails) els.recDetails.open = false;
-      if (els.channelDetails) els.channelDetails.open = false;
-    } else {
-      collapseNonDateSections();
-    }
+    if (hasActiveFilterValues_()) collapseSectionsForActiveFilter_();
   }
 
   function applyEscResultPanelState() {
@@ -2789,17 +2854,27 @@
     recommendVisibleCount = RECOMMEND_LIMITS.random;
     randomPoolIds = [];
     dateSortMode = "desc";
-    dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
+    dateVisibleDateCount = 1;
+    preventDateAutoFill = true;
     sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+    sungSortAscending = false;
     setActiveModeButton("data-recommend-mode", recommendMode);
     setActiveModeButton("data-date-sort", dateSortMode);
+    updateSungModeButtons_();
 
     setFilterDetailsOpen_(false);
+    if (els.coverDetails) els.coverDetails.open = false;
     if (els.recommendDetails) els.recommendDetails.open = true;
     if (els.dateDetails) els.dateDetails.open = true;
     if (els.sungDetails) els.sungDetails.open = false;
     if (els.recDetails) els.recDetails.open = false;
     if (els.channelDetails) els.channelDetails.open = false;
+
+    const latestGroups = getDateGroupsBySortMode(filteredSongs);
+    if (latestGroups.length) setGroupCollapsed("date", latestGroups[0].key, false);
+    renderRecommendSection();
+    renderDateSection();
+    renderSungSection();
   }
 
   function setActiveModeButton(attributeName, value) {
@@ -2863,8 +2938,17 @@
       searchRenderTimer = null;
     }
 
-    applyAndRender(true);
-    collapseNonDateSections();
+    if (!hasActiveFilterValues_()) {
+      resetFilters();
+      applyAndRender(true);
+      setFilterDetailsOpen_(false);
+      applyEscResultPanelState();
+      scrollToRecommendSection();
+      filterApplyPending = false;
+      return;
+    }
+
+    applyAndRender(true, { syncSungForFilters: true });
     setFilterDetailsOpen_(false);
 
     window.setTimeout(() => {
@@ -4688,15 +4772,65 @@
     const items = normalizeNoticeItems(input);
     const normalizedItems = items.length ? items : [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
     const noticeSeparatorHtml = `<span class="notice-separator">　　／　　</span>`;
-    const lineHtml = normalizedItems.map(formatNoticeItemHtml).join(noticeSeparatorHtml) + (normalizedItems.length > 1 ? noticeSeparatorHtml : "");
+    currentNoticeLineHtml = normalizedItems.map(formatNoticeItemHtml).join(noticeSeparatorHtml) + noticeSeparatorHtml;
 
     els.noticeText.innerHTML = `
       <span class="notice-track">
-        <span class="notice-content">${lineHtml}</span>
-        <span class="notice-content" aria-hidden="true">${lineHtml}</span>
-        <span class="notice-content" aria-hidden="true">${lineHtml}</span>
+        <span class="notice-content"></span>
+        <span class="notice-content" aria-hidden="true"></span>
       </span>
     `;
+    const viewport = els.noticeText.closest(".notice-viewport");
+    if (!noticeResizeObserver && viewport && typeof ResizeObserver === "function") {
+      noticeResizeObserver = new ResizeObserver(scheduleNoticeMarqueeLayout_);
+      noticeResizeObserver.observe(viewport);
+    }
+    scheduleNoticeMarqueeLayout_();
+    if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === "function") {
+      document.fonts.ready.then(scheduleNoticeMarqueeLayout_).catch(() => {});
+    }
+  }
+
+  function scheduleNoticeMarqueeLayout_() {
+    if (!els.noticeText || noticeLayoutRaf) return;
+    noticeLayoutRaf = window.requestAnimationFrame(() => {
+      noticeLayoutRaf = 0;
+      configureNoticeMarquee_();
+    });
+  }
+
+  function configureNoticeMarquee_() {
+    const viewport = els.noticeText && els.noticeText.closest(".notice-viewport");
+    const track = els.noticeText && els.noticeText.querySelector(".notice-track");
+    const contents = track ? Array.from(track.querySelectorAll(".notice-content")) : [];
+    if (!viewport || !track || contents.length !== 2 || viewport.clientWidth <= 0) return;
+
+    track.style.animation = "none";
+    contents.forEach(content => {
+      content.innerHTML = currentNoticeLineHtml;
+    });
+
+    const firstContent = contents[0];
+    let repetitions = 1;
+    const maxRepetitions = Math.min(500, Math.max(2, Math.ceil(viewport.clientWidth / 12) + 1));
+    while (firstContent.getBoundingClientRect().width < viewport.clientWidth + 1 && repetitions < maxRepetitions) {
+      firstContent.insertAdjacentHTML("beforeend", currentNoticeLineHtml);
+      repetitions += 1;
+    }
+
+    contents[1].innerHTML = firstContent.innerHTML;
+    const primaryLinkCount = (currentNoticeLineHtml.match(/<a\b/g) || []).length;
+    firstContent.querySelectorAll("a").forEach((anchor, index) => {
+      if (index >= primaryLinkCount) anchor.tabIndex = -1;
+    });
+    contents[1].querySelectorAll("a").forEach(anchor => {
+      anchor.tabIndex = -1;
+    });
+    const cycleWidth = firstContent.getBoundingClientRect().width;
+    const durationSeconds = Math.max(1, cycleWidth / NOTICE_SPEED_PX_PER_SECOND);
+    track.style.setProperty("--notice-marquee-duration", `${durationSeconds}s`);
+    track.offsetWidth;
+    track.style.removeProperty("animation");
   }
 
   function normalizeNoticeItems(input) {
@@ -6717,10 +6851,12 @@
     filterCloseAnimationTimer = null;
 
     if (shouldOpen) {
+      const wasOpen = Boolean(els.filterDetails.open && !els.filterDetails.classList.contains("is-closing"));
       els.filterDetails.classList.remove("is-closing");
       els.filterDetails.open = true;
       updateFilterSummaryHelp();
       setStatusBoxExpanded_(false);
+      if (!wasOpen) collapseAllContentSectionsForFilter_();
       return;
     }
 
