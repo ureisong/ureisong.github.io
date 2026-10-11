@@ -99,7 +99,7 @@
             </label>
 
             <div class="buttons">
-              <button id="resetButton" type="button">필터 초기화</button>
+              <button id="resetButton" type="button" aria-label="닫기">닫기</button>
             </div>
           </div>
         </section>
@@ -137,7 +137,7 @@
           <div class="cover-window cover-showcase-window">
             <div class="cover-showcase-layout">
               <div id="coverTrack" class="cover-track cover-tab-list" role="tablist" aria-label="커버곡 목록"></div>
-              <a id="coverFeature" class="cover-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="cover" data-playlist-section="커버곡" data-playlist-hint="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!" title="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!">
+              <a id="coverFeature" class="cover-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="cover" data-playlist-section="커버곡" data-playlist-hint="클릭 또는 탭하면 플레이리스트에 추가 · PC 우클릭/모바일 길게 누르면 새 탭에서 열기" title="클릭 또는 탭하면 플레이리스트에 추가 · PC 우클릭/모바일 길게 누르면 새 탭에서 열기">
                 <div id="coverFeatureVisual" class="cover-feature-visual">
                   <div class="cover-feature-image-wrap">
                     <img id="coverFeatureImage" class="cover-feature-image" src="" alt="" decoding="async" />
@@ -232,7 +232,7 @@
           <div class="cover-window cover-showcase-window">
             <div class="cover-showcase-layout rec-showcase-layout">
               <div id="recTrack" class="cover-track cover-tab-list rec-tab-list" role="tablist" aria-label="추천 플레이리스트 목록"></div>
-              <a id="recFeature" class="cover-feature rec-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="rec" data-playlist-section="추천 플레이리스트" data-playlist-hint="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!" title="우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!">
+              <a id="recFeature" class="cover-feature rec-feature" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="rec" data-playlist-section="추천 플레이리스트" data-playlist-hint="클릭 또는 탭하면 플레이리스트에 추가 · PC 우클릭/모바일 길게 누르면 새 탭에서 열기" title="클릭 또는 탭하면 플레이리스트에 추가 · PC 우클릭/모바일 길게 누르면 새 탭에서 열기">
                 <div id="recFeatureVisual" class="cover-feature-visual">
                   <div class="cover-feature-image-wrap">
                     <img id="recFeatureImage" class="cover-feature-image" src="" alt="" decoding="async" />
@@ -319,7 +319,7 @@
         </div>
       </div>
       <select id="playlistSelect" aria-label="플레이리스트 선택"></select>
-      <input id="playlistNameInput" class="playlist-name-input" type="text" placeholder="플레이리스트 이름" hidden />
+      <input id="playlistNameInput" class="playlist-name-input" type="text" placeholder="플레이리스트 이름" maxlength="30" pattern="[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9]{1,30}" autocomplete="off" hidden />
       <div id="playlistActionRow" class="playlist-action-row">
         <button id="playlistDeleteButton" type="button">삭제</button>
         <button id="playlistRenameButton" type="button">이름변경</button>
@@ -360,7 +360,7 @@
         <label><input type="radio" name="playlistImportMode" value="merge"> 기존의 플리에 병합</label>
       </div>
       <div class="playlist-import-target-row">
-        <input id="playlistImportNewName" type="text" aria-label="새 플레이리스트 이름">
+        <input id="playlistImportNewName" type="text" aria-label="새 플레이리스트 이름" maxlength="30" pattern="[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9]{1,30}" autocomplete="off">
         <select id="playlistImportMergeSelect" aria-label="병합할 플레이리스트" disabled></select>
       </div>
       <div class="playlist-import-preview-heading">

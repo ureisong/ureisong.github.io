@@ -26,6 +26,7 @@
   const NOTICE_CSV_URL = CONFIG.NOTICE_CSV_URL || "";
   const SETTINGS_CSV_URL = CONFIG.SETTINGS_CSV_URL || "";
   const SEARCH_ALIASES_CSV_URL = CONFIG.SEARCH_ALIASES_CSV_URL || "";
+  const SONGBOOK_CSV_URL = CONFIG.SONGBOOK_CSV_URL || "";
   const CSV_CACHE_PREFIX = "csv_cache_";
   const SONGS_CSV_CACHE_NAME = "songs_title_artist";
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
@@ -38,6 +39,7 @@
   let searchAliasesLoadedFromData = false;
   let searchRenderTimer = null;
   let filterApplyPending = false;
+  let suppressSungOpenSideEffects_ = false;
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
@@ -83,6 +85,7 @@
   const PLAYLIST_SHARE_MAX_DECOMPRESSED_BYTES = 1_000_000;
   const PLAYLIST_SHARE_MAX_ITEMS = 500;
   const PLAYLIST_SHARE_MAX_NAME_LENGTH = 80;
+  const PLAYLIST_NAME_MAX_LENGTH = 30;
   const PLAYLIST_SHARE_MAX_ITEM_STRING_LENGTH = 100;
   const DEFAULT_PLAYLIST_NAME = "기본";
   const DEFAULT_PLAYLIST_SEED_ITEMS = [
@@ -270,12 +273,14 @@
 
   let allSongs = [];
   let filteredSongs = [];
+  let songbookSongs = [];
   let recommendMode = "random";
   let recommendVisibleCount = RECOMMEND_LIMITS.random;
   let randomPoolIds = [];
   let dateVisibleDateCount = 1;
   let dateSortMode = "desc";
   let sungMode = "song";
+  let sungSortAscending = false;
   let sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
   let currentSungGroups = new Map();
   let currentDateGroups = new Map();
@@ -434,11 +439,11 @@
 
   function bindEvents() {
     els.searchInput.addEventListener("input", () => {
-      applyFilterResultPanelState();
+      applyFilterResultPanelState({ preserveSung: true });
       if (searchRenderTimer) window.clearTimeout(searchRenderTimer);
       searchRenderTimer = window.setTimeout(() => {
         searchRenderTimer = null;
-        applyAndRender(true);
+        applyAndRender(true, { syncSungForFilters: true });
       }, 100);
     });
     els.searchInput.addEventListener("keydown", event => {
@@ -461,8 +466,8 @@
     window.addEventListener("wheel", deactivateSearchIfFilterOutOfView, { passive: true });
     window.addEventListener("touchmove", deactivateSearchIfFilterOutOfView, { passive: true });
     if (els.searchMode) els.searchMode.addEventListener("change", () => {
-      applyFilterResultPanelState();
-      applyAndRender(true);
+      applyFilterResultPanelState({ preserveSung: true });
+      applyAndRender(true, { syncSungForFilters: true });
     });
 
     if (els.filterDetails) {
@@ -519,19 +524,23 @@
 
     [els.yearFilter, els.monthFilter, els.categoryFilter, els.countryFilter].forEach(select => {
       select.addEventListener("change", () => {
-        applyFilterResultPanelState();
+        applyFilterResultPanelState({ preserveSung: true });
         refreshDayFilterOptions();
-        applyAndRender(true);
+        applyAndRender(true, { syncSungForFilters: true });
       });
     });
     els.dayFilter.addEventListener("change", () => {
-      applyFilterResultPanelState();
-      applyAndRender(true);
+      applyFilterResultPanelState({ preserveSung: true });
+      applyAndRender(true, { syncSungForFilters: true });
     });
 
     els.resetButton.addEventListener("click", () => {
-      applyFilterResultPanelState();
+      if (!hasActiveFilterValues_()) {
+        setFilterDetailsOpen_(false);
+        return;
+      }
       resetFilters();
+      applyFilterResultPanelState();
       applyAndRender(true);
     });
 
@@ -568,16 +577,34 @@
     });
 
     els.dateMoreButton.addEventListener("click", () => {
-      dateVisibleDateCount += getDateMoreStep(dateSortMode);
+      const groups = getDateGroupsBySortMode(filteredSongs);
+      const previousCount = Math.min(dateVisibleDateCount, groups.length);
+      if (dateSortMode === "desc" || dateSortMode === "asc") {
+        const nextCount = Math.min(groups.length, previousCount + 3);
+        groups.slice(previousCount, nextCount).forEach(group => {
+          setGroupCollapsed("date", group.key, true);
+        });
+        dateVisibleDateCount = nextCount;
+      } else {
+        dateVisibleDateCount = Math.min(
+          groups.length,
+          dateVisibleDateCount + getDateMoreStep(dateSortMode)
+        );
+      }
       renderDateSection();
     });
 
     document.querySelectorAll("[data-sung-mode]").forEach(button => {
       button.addEventListener("click", () => {
-        sungMode = button.dataset.sungMode || "song";
+        const nextMode = button.dataset.sungMode || "song";
+        if (nextMode === sungMode && button.classList.contains("active")) {
+          sungSortAscending = !sungSortAscending;
+        } else {
+          sungMode = nextMode;
+          sungSortAscending = false;
+        }
         sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
-        document.querySelectorAll("[data-sung-mode]").forEach(btn => btn.classList.remove("active"));
-        button.classList.add("active");
+        updateSungModeButtons_();
         renderSungSection();
       });
     });
@@ -585,11 +612,21 @@
     if (els.sungDetails) {
       els.sungDetails.addEventListener("toggle", () => {
         if (els.sungDetails.open) {
-          setFilterDetailsOpen_(false);
+          const isFilterDrivenOpen = suppressSungOpenSideEffects_;
+          suppressSungOpenSideEffects_ = false;
+          if (!isFilterDrivenOpen) setFilterDetailsOpen_(false);
           if (els.recommendDetails) els.recommendDetails.open = false;
           if (els.dateDetails) els.dateDetails.open = false;
 
-          scrollElementBelowStickyHeader_(els.sungDetails, { behavior: "smooth", offset: 10 });
+          if (!isFilterDrivenOpen) {
+            scrollElementBelowStickyHeader_(els.sungDetails, { behavior: "smooth", offset: 10 });
+          }
+        } else {
+          suppressSungOpenSideEffects_ = false;
+          // 접힐 때 곡/아티스트 탭의 개수 정렬을 기본인 많은순으로 초기화합니다.
+          sungSortAscending = false;
+          updateSungModeButtons_();
+          renderSungSection();
         }
       });
     }
@@ -1039,7 +1076,7 @@
     return row ? String(row.value || "").trim() : "";
   }
 
-  async function loadVersionedCsvRows({ cacheName, url, version, forceNetwork = false }) {
+  async function loadVersionedCsvRows({ cacheName, url, version, forceNetwork = false, parser = parseCsv }) {
     const normalizedVersion = String(version || "").trim();
     const cached = readVersionedCsvCache(cacheName);
 
@@ -1048,8 +1085,8 @@
     }
 
     const text = await fetchText(url, forceNetwork);
-    const rows = parseCsv(text);
-    writeVersionedCsvCache(cacheName, rows, normalizedVersion || String(Date.now()));
+    const rows = parser(text);
+    writeVersionedCsvCache(cacheName, rows, normalizedVersion);
     return rows;
   }
 
@@ -1078,7 +1115,7 @@
     const aa = String(a || "").trim();
     const bb = String(b || "").trim();
     if (aa === bb) return 0;
-    return aa > bb ? 1 : -1;
+    return aa.localeCompare(bb, undefined, { numeric: true, sensitivity: "base" });
   }
 
   async function loadData(forceNetwork = false, settingsRows = null) {
@@ -1095,6 +1132,7 @@
         const cached = cachedAtStart;
         if (cached && hasUsableLocalCache) {
           allSongs = normalizeSongs(cached.data || cached);
+          songbookSongs = normalizeSongbookSongs(cached.songbook || []);
           if (cached.searchAliases && typeof cached.searchAliases === "object") {
             searchAliases = normalizeSearchAliasesObject(cached.searchAliases);
           }
@@ -1114,7 +1152,7 @@
           renderCoverSection();
           renderRecSection();
           renderChannelSection();
-          buildFilters(allSongs);
+          buildFilters(allSongs, songbookSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
           // 캐시가 있으면 최신 데이터 갱신을 기다리지 않고 바로 사용할 수 있게 합니다.
@@ -1128,6 +1166,7 @@
         searchAliasesLoadedFromData = true;
       }
       allSongs = normalizeSongs(payload.data || payload || []);
+      songbookSongs = normalizeSongbookSongs(payload.songbook || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
       applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
@@ -1147,6 +1186,7 @@
       renderChannelSection();
       writeLocalJsonCache({ 
         data: allSongs,
+        songbook: songbookSongs,
         notices: currentNoticeItems,
         footerText: currentFooterText,
         title: document.title,
@@ -1160,7 +1200,7 @@
         saved_at: Date.now()
       });
 
-      buildFilters(allSongs);
+      buildFilters(allSongs, songbookSongs);
       applyAndRender(true);
       const dataUpdatedAt = payload.generated_at ? new Date(payload.generated_at) : new Date();
       setStatus(`${formatStatusDate(dataUpdatedAt)} · ${allSongs.length}`);
@@ -1170,6 +1210,7 @@
       const cachedSongs = cached && (Array.isArray(cached.data) ? cached.data : Array.isArray(cached) ? cached : []);
       if (Array.isArray(cachedSongs) && cachedSongs.length) {
         allSongs = normalizeSongs(cachedSongs);
+        songbookSongs = normalizeSongbookSongs(cached.songbook || []);
         currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
         currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
         applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
@@ -1186,13 +1227,14 @@
         renderCoverSection();
         renderRecSection();
         renderChannelSection();
-        buildFilters(allSongs);
+        buildFilters(allSongs, songbookSongs);
         applyAndRender(true);
         setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length} · ⓒ`);
       } else {
         allSongs = [];
         filteredSongs = [];
-        buildFilters(allSongs);
+        songbookSongs = [];
+        buildFilters(allSongs, songbookSongs);
         setStatus("데이터 로딩 실패");
         els.resultCount.textContent = "0";
         els.recommendList.innerHTML = `<div class="empty error-box"><strong>데이터를 읽지 못했습니다.</strong><br>네트워크 상태를 확인하세요.</div>`;
@@ -1221,8 +1263,21 @@
         if (data.some(row => !row || !String(row.id || "").trim())) {
           throw new Error("data.json에 유효하지 않은 곡 데이터가 포함되어 있습니다.");
         }
+        let songbookRows = Array.isArray(json) ? [] : (Array.isArray(json.songbook) ? json.songbook : []);
+        if (!songbookRows.length && SONGBOOK_CSV_URL) {
+          const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
+            ? settingsRows
+            : (Array.isArray(currentSettingsRows) && currentSettingsRows.length)
+              ? currentSettingsRows
+              : await loadSettingsRows();
+          currentSettingsRows = effectiveSettingsRows;
+          const songbookVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS)
+            || String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SONGS]) || "").trim();
+          songbookRows = await loadSongbookCsvRows_(songbookVersion, forceNetwork);
+        }
         return {
           data,
+          songbook: songbookRows,
           notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
           covers: Array.isArray(json) ? [] : (json.covers || []),
           recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
@@ -1268,8 +1323,11 @@
       } else {
         tasks.push(Promise.resolve([]));
       }
+      tasks.push(SONGBOOK_CSV_URL
+        ? loadSongbookCsvRows_(songsVersion, forceNetwork)
+        : Promise.resolve([]));
 
-      const [songsRows, likesRows, noticeRows = []] = await Promise.all(tasks);
+      const [songsRows, likesRows, noticeRows = [], songbookRows = []] = await Promise.all(tasks);
       const merged = mergeSongsAndLikes(songsRows, likesRows);
       if (!merged.length) throw new Error("CSV에 사용할 수 있는 곡 데이터가 없습니다.");
       const notices = extractNoticeItemsFromRows(noticeRows);
@@ -1281,6 +1339,7 @@
       const settings = extractSettingsFromRows(effectiveSettingsRows);
       return {
         data: merged,
+        songbook: songbookRows,
         notices,
         covers,
         recs,
@@ -1390,6 +1449,58 @@
     return rows;
   }
 
+  function parseSongbookCsvRows(text) {
+    const source = String(text || "").replace(/^\uFEFF/, "").trim();
+    if (!source) return [];
+    if (/^<(?:!doctype\s+html|html|head|body)\b/i.test(source)) {
+      throw new Error("노래책 CSV 대신 HTML 응답을 받았습니다.");
+    }
+
+    const rows = parseCsvRows(source);
+    if (!rows.length) return [];
+    const getRawCell = row => row.length > 6 ? row[6] : row.length === 1 ? row[0] : "";
+    const firstValue = String(getRawCell(rows[0]) || "").trim();
+    const startIndex = firstValue.includes("／") ? 0 : 1;
+    const result = [];
+    const seen = new Set();
+
+    for (let index = startIndex; index < rows.length; index += 1) {
+      const raw = String(getRawCell(rows[index]) || "").trim();
+      if (!raw || ["\"\"", "''"].includes(raw) || /^[\"']{2,}$/.test(raw) || !raw.includes("／")) continue;
+      const parts = raw.split("／", 4).map(value => String(value || "").trim());
+      const title = parts[0] || "";
+      const artist = parts[1] || "";
+      if (!title) continue;
+      const identity = `${title.normalize("NFKC").split("ㅨ", 1)[0].toLocaleLowerCase().replace(/\s+/g, "")}\u0000${artist.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "")}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      result.push({
+        title,
+        artist,
+        country: parts[2] || "",
+        category: parts[3] || ""
+      });
+    }
+    return result;
+  }
+
+  async function loadSongbookCsvRows_(version, forceNetwork = false) {
+    if (!SONGBOOK_CSV_URL) return [];
+    try {
+      return await loadVersionedCsvRows({
+        cacheName: "songbook",
+        url: SONGBOOK_CSV_URL,
+        version,
+        forceNetwork,
+        parser: parseSongbookCsvRows
+      });
+    } catch (err) {
+      console.warn("[노래책 CSV 로딩 실패]", err);
+      const cached = readVersionedCsvCache("songbook");
+      return cached && Array.isArray(cached.rows) ? cached.rows : [];
+    }
+  }
+
   function parseCsv(text) {
     const rows = [];
     let row = [];
@@ -1488,12 +1599,40 @@
     return endSeconds > startSeconds ? endText : "";
   }
 
-  function buildFilters(songs) {
-    fillSelectWithAll(els.yearFilter, uniqueSorted(songs.map(s => s.year).filter(Boolean), true));
-    fillSelectWithAll(els.monthFilter, uniqueSorted(songs.map(s => s.month).filter(Boolean), false, true));
-    fillSelectWithAll(els.countryFilter, uniqueSorted(songs.flatMap(getCountryValues)));
-    fillSelectWithAll(els.categoryFilter, uniqueSorted(songs.flatMap(getCategoryValues)));
+  function buildFilters(songs, additionalSongs = []) {
+    const allFilterSongs = [...(songs || []), ...(additionalSongs || [])];
+    fillSelectWithAll(els.yearFilter, uniqueSorted((songs || []).map(s => s.year).filter(Boolean), true));
+    fillSelectWithAll(els.monthFilter, uniqueSorted((songs || []).map(s => s.month).filter(Boolean), false, true));
+    fillSelectWithAll(els.countryFilter, uniqueSorted(allFilterSongs.flatMap(getCountryValues)));
+    fillSelectWithAll(els.categoryFilter, uniqueSorted(allFilterSongs.flatMap(getCategoryValues)));
     refreshDayFilterOptions();
+  }
+
+  function normalizeSongbookSongs(items) {
+    if (!Array.isArray(items)) return [];
+    return items.map((item, index) => {
+      const cleanField = value => {
+        const text = String(value || "").trim();
+        return text === '""' || text === "''" ? "" : text;
+      };
+      const title = cleanField(item && item.title);
+      if (!title) return null;
+      const artist = cleanField(item && item.artist);
+      const country = cleanField(item && item.country);
+      const category = cleanField(item && item.category);
+      return {
+        title,
+        artist,
+        country,
+        category,
+        titleValues: splitMultiValue(title),
+        artistValues: splitMultiValue(artist),
+        countryValues: splitMultiValue(country),
+        categoryValues: splitMultiValue(category),
+        _songbookOnly: true,
+        _songbookIndex: index
+      };
+    }).filter(Boolean);
   }
 
   function applyAndRender(resetVisible, options = {}) {
@@ -1530,6 +1669,14 @@
 
       return true;
     });
+
+    if (options.syncSungForFilters === true) {
+      if (hasActiveFilterValues_()) {
+        syncSungSectionForFilterResults_();
+      } else if (els.sungDetails) {
+        els.sungDetails.open = false;
+      }
+    }
 
     els.resultCount.textContent = String(filteredSongs.length);
     renderRecommendSection();
@@ -1932,8 +2079,7 @@
     setFilterDetailsOpen_(true);
     if (els.searchInput) els.searchInput.value = value;
     if (els.searchMode) els.searchMode.value = type === "artist" ? "artist" : "title";
-    applyAndRender(true);
-    collapseNonDateSections();
+    applyAndRender(true, { syncSungForFilters: true });
     scrollToFilterSection();
   }
 
@@ -2079,13 +2225,50 @@
   }
 
   function getDateMoreStep(mode = dateSortMode) {
-    return mode === "likes_total" ? DATE_RECOMMEND_MORE_STEP : 1;
+    return mode === "likes_total" ? DATE_RECOMMEND_MORE_STEP : 3;
+  }
+
+  function updateSungModeButtons_() {
+    document.querySelectorAll("[data-sung-mode]").forEach(button => {
+      const mode = button.dataset.sungMode || "song";
+      const active = mode === sungMode;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+      button.title = active
+        ? `${mode === "artist" ? "아티스트" : "곡"} ${sungSortAscending ? "적은순" : "많은순"} · 이름순 정렬. 다시 누르면 개수 정렬이 반전됩니다.`
+        : "선택하면 많은순 · 이름순 정렬로 전환됩니다.";
+    });
+  }
+
+  function syncSungSectionForFilterResults_() {
+    if (!hasActiveFilterValues_()) return false;
+
+    const songGroups = groupBySung(filteredSongs, "song", getFilteredSongbookOnlyItems_("song"));
+    const artistGroups = groupBySung(filteredSongs, "artist", []);
+    const nextMode = songGroups.length ? "song" : artistGroups.length ? "artist" : "";
+
+    if (!nextMode) {
+      if (els.sungDetails) els.sungDetails.open = false;
+      return false;
+    }
+
+    sungMode = nextMode;
+    sungSortAscending = false;
+    sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
+    [...songGroups, ...artistGroups].forEach(group => setGroupCollapsed("sung", group.key, true));
+    updateSungModeButtons_();
+    if (els.sungDetails && !els.sungDetails.open) {
+      suppressSungOpenSideEffects_ = true;
+      els.sungDetails.open = true;
+    }
+    return true;
   }
 
   function renderSungSection() {
     if (!els.sungList) return;
 
-    const groups = groupBySung(filteredSongs, sungMode);
+    const visibleSongbookItems = sungMode === "song" ? getFilteredSongbookOnlyItems_() : [];
+    const groups = groupBySung(filteredSongs, sungMode, visibleSongbookItems);
     currentSungGroups = new Map(groups.map(group => [group.key, group]));
     const visibleGroups = groups.slice(0, sungVisibleGroupCount);
     const hasMore = sungVisibleGroupCount < groups.length;
@@ -2108,7 +2291,7 @@
             <span>${escapeHtml(group.label)}</span>
             <span class="date-group-count">${group.items.length}곡</span>
           </button>
-          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${collapsed ? "" : group.items.map(renderSongCard).join("")}</div>
+          <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${collapsed ? "" : (group.songbookOnly ? '<div class="empty sung-no-broadcast">등록된 방송 데이터가 없습니다</div>' : group.items.map(renderSongCard).join(""))}</div>
         </section>
       `;
     }).join("");
@@ -2133,6 +2316,10 @@
   function renderSungGroupBody(key, body) {
     const group = currentSungGroups.get(key);
     if (!group || !body) return;
+    if (group.songbookOnly) {
+      body.innerHTML = '<div class="empty sung-no-broadcast">등록된 방송 데이터가 없습니다</div>';
+      return;
+    }
     if (!body.innerHTML.trim()) {
       body.innerHTML = group.items.map(renderSongCard).join("");
     }
@@ -2152,7 +2339,7 @@
     });
   }
 
-  function groupBySung(songs, mode) {
+  function groupBySung(songs, mode, songbookItems = []) {
     const map = new Map();
 
     [...songs].sort(compareDateDesc).forEach(song => {
@@ -2178,10 +2365,21 @@
       const label = `${titleText} - ${artistText}`;
 
       if (!map.has(key)) {
-        map.set(key, { key, label, items: [] });
+        map.set(key, { key, label, items: [], songbookOnly: false });
       }
       map.get(key).items.push(song);
     });
+
+    if (mode === "song") {
+      (songbookItems || []).forEach(songbookItem => {
+        const titleText = getCanonicalSungTitleText_(songbookItem.title) || "곡명 없음";
+        const artistText = String(songbookItem.artist || "").trim() || "아티스트 없음";
+        const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
+        if (!map.has(key)) {
+          map.set(key, { key, label: `${titleText} - ${artistText}`, items: [], songbookOnly: true });
+        }
+      });
+    }
 
     return [...map.values()]
       .map(group => ({
@@ -2189,8 +2387,48 @@
         items: [...group.items].sort(compareDateSongLikesDesc)
       }))
       .sort((a, b) => {
-        return b.items.length - a.items.length || a.label.localeCompare(b.label, "ko");
+        const countOrder = sungSortAscending ? a.items.length - b.items.length : b.items.length - a.items.length;
+        return countOrder || a.label.localeCompare(b.label, "ko");
       });
+  }
+
+  function getFilteredSongbookOnlyItems_(mode = sungMode) {
+    if (!songbookSongs.length || mode !== "song") return [];
+
+    const years = getFilterValues(els.yearFilter).map(Number);
+    const months = getFilterValues(els.monthFilter).map(Number);
+    const days = getFilterValues(els.dayFilter).map(Number);
+    if (years.length || months.length || days.length) return [];
+
+    const categories = getFilterValues(els.categoryFilter);
+    const countries = getFilterValues(els.countryFilter);
+    const keyword = normalizeSearchText(els.searchInput ? els.searchInput.value : "");
+    const searchMode = els.searchMode ? els.searchMode.value : "all";
+    const query = buildSearchQuery(keyword);
+
+    return songbookSongs.filter(item => {
+      if (isSongbookDuplicateInSongs_(item, allSongs)) return false;
+      if (categories.length && !hasAnyMultiValue(getCategoryValues(item), categories)) return false;
+      if (countries.length && !hasAnyMultiValue(getCountryValues(item), countries)) return false;
+      if (hasSearchQuery(query)) {
+        if (searchMode === "date" || !matchesSearchQuery(item, searchMode, query)) return false;
+      }
+      return true;
+    });
+  }
+
+  function isSongbookDuplicateInSongs_(songbookItem, songs) {
+    const bookTitles = getTitleValues(songbookItem).map(getCanonicalSungTitleText_).map(normalizeSearchText).filter(Boolean);
+    const bookArtists = getArtistValues(songbookItem).map(normalizeSearchText).filter(Boolean);
+    if (!bookTitles.length) return false;
+
+    return (songs || []).some(song => {
+      const songTitles = getTitleValues(song).map(getCanonicalSungTitleText_).map(normalizeSearchText).filter(Boolean);
+      if (!songTitles.some(title => bookTitles.includes(title))) return false;
+      if (!bookArtists.length) return true;
+      const songArtists = getArtistValues(song).map(normalizeSearchText).filter(Boolean);
+      return bookArtists.some(artist => songArtists.includes(artist));
+    });
   }
   
   function splitMultiValue(value) {
@@ -2231,7 +2469,11 @@
 
   function getSearchableTitleValues_(song) {
     return getTitleValues(song)
-      .map(value => String(value || "").split("ㅨ", 1)[0].trim())
+      .map(value => String(value || "")
+        .split("ㅨ", 1)[0]
+        .replace(/\bfeat\.\s*/gi, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim())
       .filter(Boolean);
   }
 
@@ -2492,8 +2734,7 @@
       if (els.searchMode) els.searchMode.value = "date";
     }
 
-    applyAndRender(true);
-    collapseNonDateSections();
+    applyAndRender(true, { syncSungForFilters: true });
     scrollToFilterSection();
   }
 
@@ -2506,9 +2747,7 @@
     if (els.dateDetails) els.dateDetails.open = true;
   }
 
-  function updateFilterToggleButtonState_() {
-    if (!els.filterToggleButton) return;
-
+  function hasActiveFilterValues_() {
     const hasSearch = Boolean(String(els.searchInput && els.searchInput.value || "").trim());
     const hasSelectedFilters = [
       els.yearFilter,
@@ -2517,13 +2756,32 @@
       els.countryFilter,
       els.categoryFilter
     ].some(select => getFilterValues(select).length > 0);
-
-    els.filterToggleButton.classList.toggle("has-active-filter", hasSearch || hasSelectedFilters);
+    return hasSearch || hasSelectedFilters;
   }
 
-  function applyFilterResultPanelState() {
+  function updateFilterToggleButtonState_() {
+    const hasActiveFilters = hasActiveFilterValues_();
+    if (els.filterToggleButton) {
+      els.filterToggleButton.classList.toggle("has-active-filter", hasActiveFilters);
+    }
+    if (els.resetButton) {
+      const label = hasActiveFilters ? "필터 초기화" : "닫기";
+      if (els.resetButton.textContent !== label) els.resetButton.textContent = label;
+      els.resetButton.setAttribute("aria-label", label);
+    }
+  }
+
+  function applyFilterResultPanelState(options = {}) {
     updateFilterToggleButtonState_();
-    collapseNonDateSections();
+    if (options.preserveSung) {
+      if (els.coverDetails) els.coverDetails.open = false;
+      if (els.recommendDetails) els.recommendDetails.open = false;
+      if (els.dateDetails) els.dateDetails.open = true;
+      if (els.recDetails) els.recDetails.open = false;
+      if (els.channelDetails) els.channelDetails.open = false;
+    } else {
+      collapseNonDateSections();
+    }
   }
 
   function applyEscResultPanelState() {
@@ -5143,9 +5401,10 @@
       }
       els.coverFeature.dataset.coverIndex = String(activeItem._actualIndex);
       els.coverFeature.dataset.playlistSection = String(activeItem.section || "커버곡");
-      els.coverFeature.dataset.playlistHint = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
-      els.coverFeature.title = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
-      els.coverFeature.setAttribute("aria-label", `${displayTitle} 새 탭에서 열기`);
+      const coverInteractionHint = "클릭 또는 탭하면 플레이리스트에 추가 · 우클릭하면 새 탭에서 열기";
+      els.coverFeature.dataset.playlistHint = coverInteractionHint;
+      els.coverFeature.title = coverInteractionHint;
+      els.coverFeature.setAttribute("aria-label", `${displayTitle} ${coverInteractionHint}`);
     }
 
     if (els.coverFeatureTitle) {
@@ -5765,11 +6024,12 @@
       els.recFeature.dataset.recIndex = String(activeItem._actualIndex);
       els.recFeature.dataset.recType = String(activeItem.type || "");
       els.recFeature.dataset.playlistSection = "추천 플레이리스트";
-      els.recFeature.dataset.playlistHint = "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
-      els.recFeature.title = activeItem.type === "id_list"
-        ? "클릭하면 현재 플레이리스트에 곡을 추가합니다."
-        : "우클릭 또는 길게 누르면 플레이리스트에 추가할 수 있어요!";
-      els.recFeature.setAttribute("aria-label", activeItem.type === "id_list" ? `${title} 현재 플레이리스트에 추가` : `${title} 새 탭에서 열기`);
+      const recInteractionHint = activeItem.type === "id_list"
+        ? "클릭 또는 탭하면 현재 플레이리스트에 곡 추가 · 우클릭은 동작하지 않음"
+        : "클릭 또는 탭하면 플레이리스트에 추가 · 우클릭하면 새 탭에서 열기";
+      els.recFeature.dataset.playlistHint = recInteractionHint;
+      els.recFeature.title = recInteractionHint;
+      els.recFeature.setAttribute("aria-label", `${title} ${recInteractionHint}`);
       els.recFeature.setAttribute("data-carousel-playlist-kind", "rec");
       if (activeItem.type === "id_list") {
         els.recFeature.removeAttribute("href");
@@ -5878,7 +6138,7 @@
     const openTag = isIdList
       ? `<button type="button" ${common} data-rec-id-list="1" title="클릭하면 현재 플레이리스트에 곡을 추가합니다.">`
       : safeUrl
-        ? `<a ${common} href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="우클릭하면 플레이리스트에 추가할 수 있어요!" title="우클릭하면 플레이리스트에 추가할 수 있어요!">`
+        ? `<a ${common} href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" data-carousel-playlist-kind="${escapeHtml(kind)}" data-playlist-hint="클릭하면 플레이리스트에 추가 · 우클릭하면 새 탭에서 열기" title="클릭하면 플레이리스트에 추가 · 우클릭하면 새 탭에서 열기">`
         : `<button type="button" ${common} disabled aria-label="유효하지 않은 영상 주소">`;
     const closeTag = isIdList || !safeUrl ? "</button>" : "</a>";
 
@@ -6175,47 +6435,140 @@
   function bindCarouselPlaylistAddCards_(root, fallbackKind) {
     if (!root) return;
 
-    const cardSelector = ".cover-card[data-carousel-playlist-kind], .cover-feature[data-carousel-playlist-kind]";
+    const cardSelector = ".cover-card[data-carousel-playlist-kind], .cover-card[data-rec-id-list], .cover-feature[data-carousel-playlist-kind]";
     const cards = [];
     if (root.matches && root.matches(cardSelector)) cards.push(root);
     root.querySelectorAll(cardSelector).forEach(card => cards.push(card));
     cards.forEach(card => {
+      if (card.dataset.carouselGestureBound === "1") return;
+      card.dataset.carouselGestureBound = "1";
+
       let longPressTimer = null;
       let longPressTriggered = false;
+      let touchClickPending = false;
+      let touchOutcome = "";
+      let touchClickResetTimer = null;
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let touchMoved = false;
 
+      const currentKind = () => card.dataset.carouselPlaylistKind || fallbackKind;
+      const isIdList = () => currentKind() === "rec" && (
+        card.dataset.recType === "id_list" || card.hasAttribute("data-rec-id-list")
+      );
+      const clearTouchTimer = () => {
+        if (longPressTimer) {
+          window.clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+      };
+      const clearTouchClickPending = () => {
+        if (touchClickResetTimer) {
+          window.clearTimeout(touchClickResetTimer);
+          touchClickResetTimer = null;
+        }
+        touchClickPending = false;
+        touchOutcome = "";
+      };
+      const openFeatureUrl = () => {
+        if (isIdList()) return;
+        const url = sanitizeExternalUrl_(card.href || "", { youtubeOnly: true });
+        if (!url) return;
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        if (opened) {
+          try { opened.opener = null; } catch {}
+        }
+      };
+      const beginLongPress = (x, y) => {
+        clearTouchTimer();
+        longPressTriggered = false;
+        longPressTimer = window.setTimeout(() => {
+          longPressTimer = null;
+          longPressTriggered = true;
+          openFeatureUrl();
+        }, 650);
+        return { x, y };
+      };
+
+      // 클릭/탭은 플레이리스트에 추가하고, PC 우클릭 또는 모바일 길게 누르기는 URL을 엽니다.
+      // UID 기반 추천 목록은 우클릭/길게 누르기로 아무 동작도 하지 않습니다.
       card.addEventListener("contextmenu", event => {
-        if (!isDesktopContextCopyEnabled()) return;
+        if (isMobileLongPressCopyEnabled_()) {
+          if (longPressTriggered) event.preventDefault();
+          return;
+        }
         event.preventDefault();
-        void handleCarouselPlaylistAdd_(card, card.dataset.carouselPlaylistKind || fallbackKind);
+        clearTouchTimer();
+        if (isIdList()) return;
+        openFeatureUrl();
       });
 
-      card.addEventListener("touchstart", () => {
+      card.addEventListener("touchstart", event => {
+        if (!isMobileLongPressCopyEnabled_()) return;
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        clearTouchTimer();
+        clearTouchClickPending();
         longPressTriggered = false;
-        if (!playlistEnabled) return;
-        longPressTimer = window.setTimeout(() => {
-          longPressTriggered = true;
-          void handleCarouselPlaylistAdd_(card, card.dataset.carouselPlaylistKind || fallbackKind);
-        }, 700);
+        touchMoved = false;
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        beginLongPress(touchStartX, touchStartY);
       }, { passive: true });
 
-      ["touchend", "touchcancel", "touchmove"].forEach(type => {
-        card.addEventListener(type, event => {
-          if (longPressTimer) {
-            window.clearTimeout(longPressTimer);
-            longPressTimer = null;
-          }
-          if (type === "touchend" && longPressTriggered) {
-            event.preventDefault();
-          }
-        }, { passive: false });
-      });
-
-      card.addEventListener("click", event => {
-        if (longPressTriggered) {
-          event.preventDefault();
+      card.addEventListener("touchmove", event => {
+        if (!isMobileLongPressCopyEnabled_() || !longPressTimer) return;
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        if (Math.abs(touch.clientX - touchStartX) > 12 || Math.abs(touch.clientY - touchStartY) > 12) {
+          touchMoved = true;
+          clearTouchTimer();
           longPressTriggered = false;
         }
-      });
+      }, { passive: true });
+
+      card.addEventListener("touchend", event => {
+        if (!isMobileLongPressCopyEnabled_()) return;
+        clearTouchTimer();
+        touchClickPending = true;
+        if (!longPressTriggered) touchOutcome = touchMoved ? "cancel" : "tap";
+        if (longPressTriggered) event.preventDefault();
+        if (touchClickResetTimer) window.clearTimeout(touchClickResetTimer);
+        touchClickResetTimer = window.setTimeout(() => {
+          clearTouchClickPending();
+          longPressTriggered = false;
+        }, 900);
+      }, { passive: false });
+
+      card.addEventListener("touchcancel", () => {
+        clearTouchTimer();
+        clearTouchClickPending();
+        longPressTriggered = false;
+        touchMoved = false;
+      }, { passive: true });
+
+      card.addEventListener("click", event => {
+        if (isMobileLongPressCopyEnabled_()) {
+          if (!touchClickPending) {
+            if (event.detail !== 0) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            void handleCarouselPlaylistAdd_(card, currentKind());
+            return;
+          }
+          const outcome = touchOutcome;
+          clearTouchClickPending();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          longPressTriggered = false;
+          if (outcome === "tap") void handleCarouselPlaylistAdd_(card, currentKind());
+          return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        void handleCarouselPlaylistAdd_(card, currentKind());
+      }, true);
     });
   }
 
@@ -7105,6 +7458,37 @@
     return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   }
 
+  function sanitizePlaylistName_(value) {
+    return String(value || "")
+      .replace(/[^가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9]/g, "")
+      .slice(0, PLAYLIST_NAME_MAX_LENGTH);
+  }
+
+  function bindPlaylistNameInput_(input) {
+    if (!input || input.dataset.playlistNameValidationBound === "1") return;
+    input.dataset.playlistNameValidationBound = "1";
+    input.maxLength = PLAYLIST_NAME_MAX_LENGTH;
+    input.addEventListener("input", event => {
+      if (event.isComposing) return;
+      const original = input.value;
+      const cursor = typeof input.selectionStart === "number" ? input.selectionStart : original.length;
+      const clean = sanitizePlaylistName_(original);
+      if (clean === original) return;
+      const cleanCursor = sanitizePlaylistName_(original.slice(0, cursor)).length;
+      input.value = clean;
+      try { input.setSelectionRange(cleanCursor, cleanCursor); } catch {}
+    });
+    input.addEventListener("compositionend", () => {
+      const original = input.value;
+      const cursor = typeof input.selectionStart === "number" ? input.selectionStart : original.length;
+      const clean = sanitizePlaylistName_(original);
+      if (clean === original) return;
+      input.value = clean;
+      const cleanCursor = sanitizePlaylistName_(original.slice(0, cursor)).length;
+      try { input.setSelectionRange(cleanCursor, cleanCursor); } catch {}
+    });
+  }
+
   function resetPlaylistNameInputUi_() {
     pendingPlaylistNameAction = "";
     if (els.playlistNameInput) {
@@ -7168,9 +7552,14 @@
       return "";
     }
 
-    const name = String(els.playlistNameInput.value || "").trim();
+    const rawName = String(els.playlistNameInput.value || "").trim();
+    const name = sanitizePlaylistName_(rawName);
     if (!name) {
-      showLikeNoticeModal("[알림]", "플레이리스트 이름을 입력해주세요.");
+      showLikeNoticeModal("[알림]", "플레이리스트 이름은 한글, 영문, 숫자만 사용할 수 있습니다.");
+      return "";
+    }
+    if (name.length > PLAYLIST_NAME_MAX_LENGTH) {
+      showLikeNoticeModal("[알림]", `플레이리스트 이름은 최대 ${PLAYLIST_NAME_MAX_LENGTH}자까지 사용할 수 있습니다.`);
       return "";
     }
 
@@ -7589,11 +7978,16 @@
   }
 
   function makeUniquePlaylistName_(name) {
-    const base = String(name || "가져온 플레이리스트").trim() || "가져온 플레이리스트";
+    const base = sanitizePlaylistName_(name) || "가져온플레이리스트";
     if (!playlistNameExists_(base)) return base;
     let index = 2;
-    while (playlistNameExists_(`${base} (${index})`)) index += 1;
-    return `${base} (${index})`;
+    while (index < 1000000) {
+      const suffix = String(index);
+      const candidate = `${base.slice(0, Math.max(1, PLAYLIST_NAME_MAX_LENGTH - suffix.length))}${suffix}`;
+      if (!playlistNameExists_(candidate)) return candidate;
+      index += 1;
+    }
+    return `${base.slice(0, PLAYLIST_NAME_MAX_LENGTH - 6)}999999`;
   }
 
   async function exportSelectedPlaylist_() {
@@ -7641,9 +8035,9 @@
     if (!importItems.length) return;
 
     if (mode === "new") {
-      const name = String(els.playlistImportNewName && els.playlistImportNewName.value || "").trim();
+      const name = sanitizePlaylistName_(String(els.playlistImportNewName && els.playlistImportNewName.value || "").trim());
       if (!name) {
-        showLikeNoticeModal("[알림]", "새 플레이리스트 이름을 입력해주세요.");
+        showLikeNoticeModal("[알림]", "플레이리스트 이름은 한글, 영문, 숫자만 사용할 수 있습니다.");
         return;
       }
       if (playlistNameExists_(name)) {
@@ -7689,6 +8083,8 @@
   }
 
   function bindPlaylistManagerEvents() {
+    bindPlaylistNameInput_(els.playlistNameInput);
+    bindPlaylistNameInput_(els.playlistImportNewName);
     if (els.playlistImportModal) els.playlistImportModal.hidden = true;
     if (els.playlistImportPreviewModal) els.playlistImportPreviewModal.hidden = true;
 
