@@ -1270,7 +1270,7 @@
         footerText: currentFooterText,
         title: document.title,
         h1: els.pageTitle ? els.pageTitle.textContent : "",
-        h1Visible: els.pageTitle ? els.pageTitle.style.display !== "none" : true,
+        h1Visible: els.pageTitle ? !els.pageTitle.hidden : false,
         covers: coverItems,
         recs: recItems,
         channels: channelItems,
@@ -1362,7 +1362,7 @@
           footerText: Array.isArray(json) ? "" : (json.footerText || json.footer || ""),
           title: Array.isArray(json) ? "" : (json.title || json.pageTitle || ""),
           h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
-          h1Visible: Array.isArray(json) ? true : (json.h1Visible !== false),
+          h1Visible: Array.isArray(json) ? false : (json.h1Visible === true),
           settings: Array.isArray(json) ? null : (json.settings || null),
           searchAliases: Array.isArray(json) ? null : (json.searchAliases || null),
           generated_at: Array.isArray(json) ? "" : (json.generated_at || "")
@@ -5233,7 +5233,7 @@
     return {
       title: titleRow ? String(titleRow.value || "").trim() : "",
       h1: h1Row ? String(h1Row.value || "").trim() : "",
-      h1Visible: h1VisibleRaw === "FALSE" ? false : true
+      h1Visible: h1VisibleRaw === "TRUE"
     };
   }
 
@@ -5245,16 +5245,19 @@
     ) || null;
   }
 
-  function applyPageTitleValues(titleValue, h1Value, h1Visible = true) {
+  function applyPageTitleValues(titleValue, h1Value, h1Visible = false) {
     const titleText = String(titleValue || "").trim();
     const h1Text = String(h1Value || "").trim();
+    const shouldShowH1 = !!h1Text && (h1Visible === true || String(h1Visible || "").trim().toUpperCase() === "TRUE");
 
     normalDocumentTitle = titleText || DEFAULT_DOCUMENT_TITLE;
     if (!tabTitleMarqueeActive) document.title = normalDocumentTitle;
 
     if (els.pageTitle) {
       els.pageTitle.textContent = h1Text || DEFAULT_H1_TEXT;
-      els.pageTitle.style.display = h1Visible === false ? "none" : "";
+      els.pageTitle.hidden = !shouldShowH1;
+      const headerMain = els.pageTitle.closest(".header-main");
+      if (headerMain) headerMain.classList.toggle("has-page-title", shouldShowH1);
     }
   }
 
