@@ -3,8 +3,6 @@
 
   const CONFIG = window.APP_CONFIG || {};
 
-  // 디버그 로그: 기본은 off. 문제 추적이 필요할 때만 브라우저 콘솔에서
-  // localStorage.setItem("songs_debug", "1") 실행 후 새로고침하면 켜짐.
   const DEBUG = Boolean(CONFIG.DEBUG) || (() => {
     try {
       return localStorage.getItem("songs_debug") === "1";
@@ -337,9 +335,9 @@
   let likeDisabledModalTimer = null;
   const collapsedGroups = new Set();
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
-  let currentNoticeLineHtml = "";
   let noticeLayoutRaf = 0;
   let noticeResizeObserver = null;
+  let currentNoticeSampledSetHtml = null;
   let currentFooterText = FOOTER_TEXT;
   let playlistEnabled = false;
   let pendingPlaylistNameAction = "";
@@ -418,8 +416,6 @@
     startRecAutoTimer();
     startChannelAutoTimer();
     bindResponsiveRender();
-    // 정적 JSON을 우선 읽습니다. JSON에 곡·설정·검색 별칭이 있으면 Sheets를 추가로
-    // 요청하지 않습니다. JSON이 없거나 잘못된 경우에만 CSV 대체 경로가 사용됩니다.
     await loadData(false, null);
     if (!searchAliasesLoadedFromData) {
       const rows = currentSettingsRows.length ? currentSettingsRows : await loadSettingsRows();
@@ -501,7 +497,7 @@
     }, { passive: true });
     document.addEventListener("click", event => {
       const target = event.target;
-      // Collapse after the clicked control handles its own action so the header's animated resize cannot cancel it.
+
       window.setTimeout(() => {
         if (els.filterDetails && els.filterDetails.open &&
             !els.filterDetails.contains(target) &&
@@ -645,7 +641,6 @@
           }
         } else {
           suppressSungOpenSideEffects_ = false;
-          // 접힐 때 곡/아티스트 탭의 개수 정렬을 기본인 많은순으로 초기화합니다.
           sungSortAscending = false;
           updateSungModeButtons_();
           renderSungSection();
@@ -1181,7 +1176,6 @@
           buildFilters(allSongs, songbookSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
-          // 캐시가 있으면 최신 데이터 갱신을 기다리지 않고 바로 사용할 수 있게 합니다.
           hidePageLoading();
         }
       }
@@ -1200,7 +1194,6 @@
       recItems = normalizeRecItems(payload.recs || payload.recommendVideos || []);
       channelItems = normalizeChannelItems(payload.channels || []);
       hydrateStoredCoverPlaylistEntries_();
-      // 외부 YouTube 제목 조회는 초기 데이터 표시를 막지 않도록 백그라운드에서 처리합니다.
       void resolvePendingStoredCoverPlaylistEntries_();
       likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
       playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
@@ -1275,8 +1268,6 @@
   async function fetchSongsPayload(forceNetwork, settingsRows = null) {
     let jsonError = null;
 
-    // 1) GitHub Pages의 정적 JSON을 우선 사용합니다. 매 방문마다 Sheets CSV 여러 개를
-    // 순차적으로 기다리지 않게 하며, 브라우저 캐시도 활용합니다.
     if (DATA_URL) {
       try {
         const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "default" });
@@ -1322,7 +1313,6 @@
       }
     }
 
-    // 2) JSON이 없거나 비어 있으면 기존 CSV를 사용합니다. CSV 요청은 병렬 실행합니다.
     if (SONGS_CSV_URL && LIKES_SMR_CSV_URL) {
       const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
         ? settingsRows
@@ -3067,8 +3057,6 @@
   function getSongAccentHue_(songId) {
     const key = String(songId || "");
     if (!songAccentHueById.has(key)) {
-      // 라벤더·보라·핑크 계열 안에서 선택해 사이트 톤을 유지하고,
-      // 현재 세션에서는 가능한 한 서로 다른 색상을 배정한다.
       const palette = Array.from({ length: 69 }, (_, index) => 260 + index);
       const unused = palette.filter(hue => !songAccentUsedHues.has(hue));
       const candidates = unused.length ? unused : palette;
@@ -4006,8 +3994,6 @@
         action();
       });
       button.addEventListener("click", event => {
-        // 포인터 조작은 pointerdown에서 처리해 레이아웃 변화로 click이 취소되는 상황을 피합니다.
-        // click.detail === 0 은 키보드 활성화 또는 프로그램 방식의 접근성 클릭입니다.
         if (event.detail !== 0) return;
         event.preventDefault();
         event.stopPropagation();
@@ -4771,8 +4757,8 @@
     if (!els.noticeText) return;
     const items = normalizeNoticeItems(input);
     const normalizedItems = items.length ? items : [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
-    const noticeSeparatorHtml = `<span class="notice-separator">　　／　　</span>`;
-    currentNoticeLineHtml = normalizedItems.map(formatNoticeItemHtml).join(noticeSeparatorHtml) + noticeSeparatorHtml;
+    currentNoticeItems = normalizedItems;
+    currentNoticeSampledSetHtml = null;
 
     els.noticeText.innerHTML = `
       <span class="notice-track">
@@ -4780,6 +4766,9 @@
         <span class="notice-content" aria-hidden="true"></span>
       </span>
     `;
+    const track = els.noticeText.querySelector(".notice-track");
+    if (track) track.addEventListener("animationiteration", rerollNoticeSetAndSchedule_);
+
     const viewport = els.noticeText.closest(".notice-viewport");
     if (!noticeResizeObserver && viewport && typeof ResizeObserver === "function") {
       noticeResizeObserver = new ResizeObserver(scheduleNoticeMarqueeLayout_);
@@ -4789,6 +4778,11 @@
     if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === "function") {
       document.fonts.ready.then(scheduleNoticeMarqueeLayout_).catch(() => {});
     }
+  }
+
+  function rerollNoticeSetAndSchedule_() {
+    currentNoticeSampledSetHtml = buildNoticeSetHtml_(currentNoticeItems);
+    scheduleNoticeMarqueeLayout_();
   }
 
   function scheduleNoticeMarqueeLayout_() {
@@ -4806,49 +4800,133 @@
     if (!viewport || !track || contents.length !== 2 || viewport.clientWidth <= 0) return;
 
     track.style.animation = "none";
+    const firstContent = contents[0];
     contents.forEach(content => {
-      content.innerHTML = currentNoticeLineHtml;
+      content.innerHTML = "";
+      content.style.removeProperty("min-width");
     });
 
-    const firstContent = contents[0];
-    let repetitions = 1;
-    const maxRepetitions = Math.min(500, Math.max(2, Math.ceil(viewport.clientWidth / 12) + 1));
-    while (firstContent.getBoundingClientRect().width < viewport.clientWidth + 1 && repetitions < maxRepetitions) {
-      firstContent.insertAdjacentHTML("beforeend", currentNoticeLineHtml);
-      repetitions += 1;
+    if (currentNoticeSampledSetHtml === null) {
+      currentNoticeSampledSetHtml = buildNoticeSetHtml_(currentNoticeItems);
+    }
+    const sampledSetHtml = currentNoticeSampledSetHtml;
+    firstContent.innerHTML = sampledSetHtml;
+    const measuredSetWidth = firstContent.getBoundingClientRect().width;
+    const cycleWidth = measuredSetWidth > 0 ? measuredSetWidth : viewport.clientWidth;
+    const primarySetLinkCount = firstContent.querySelectorAll("a").length;
+    const requiredContentWidth = viewport.clientWidth + cycleWidth;
+
+    if (sampledSetHtml) {
+      let repeatedSets = 1;
+      const maxCopies = Math.min(500, Math.max(2, Math.ceil(viewport.clientWidth / cycleWidth) + 2));
+      while (firstContent.getBoundingClientRect().width < requiredContentWidth && repeatedSets < maxCopies) {
+        firstContent.insertAdjacentHTML("beforeend", sampledSetHtml);
+        repeatedSets += 1;
+      }
+    }
+
+    if (firstContent.getBoundingClientRect().width < requiredContentWidth) {
+      firstContent.style.minWidth = `${requiredContentWidth}px`;
     }
 
     contents[1].innerHTML = firstContent.innerHTML;
-    const primaryLinkCount = (currentNoticeLineHtml.match(/<a\b/g) || []).length;
-    firstContent.querySelectorAll("a").forEach((anchor, index) => {
-      if (index >= primaryLinkCount) anchor.tabIndex = -1;
+    if (firstContent.style.minWidth) {
+      contents[1].style.minWidth = firstContent.style.minWidth;
+    }
+
+    let linkIndex = 0;
+    firstContent.querySelectorAll("a").forEach(anchor => {
+      if (linkIndex >= primarySetLinkCount) anchor.tabIndex = -1;
+      linkIndex += 1;
     });
     contents[1].querySelectorAll("a").forEach(anchor => {
       anchor.tabIndex = -1;
     });
-    const cycleWidth = firstContent.getBoundingClientRect().width;
-    const durationSeconds = Math.max(1, cycleWidth / NOTICE_SPEED_PX_PER_SECOND);
-    track.style.setProperty("--notice-marquee-duration", `${durationSeconds}s`);
+
+    track.style.setProperty("--notice-marquee-duration", `${Math.max(1, cycleWidth / NOTICE_SPEED_PX_PER_SECOND)}s`);
+    track.style.setProperty("--notice-marquee-shift", `-${cycleWidth}px`);
     track.offsetWidth;
     track.style.removeProperty("animation");
   }
 
   function normalizeNoticeItems(input) {
-    if (Array.isArray(input)) {
-      return input
-        .map(item => {
-          if (typeof item === "string") return { text: item.trim(), link: "" };
-          return {
-            text: String(item && item.text || item && item.value || "").trim(),
-            link: String(item && item.link || "").trim()
-          };
-        })
-        .filter(item => item.text);
+    const rawItems = Array.isArray(input)
+      ? input.map(item => {
+        if (typeof item === "string") return { text: item.trim(), link: "" };
+        return {
+          text: String(item && item.text || item && item.value || "").trim(),
+          link: String(item && item.link || "").trim()
+        };
+      })
+      : (String(input || "").trim() ? [{ text: String(input || "").trim(), link: "" }] : []);
+
+    return rawItems.filter(item => {
+      if (!item.text) return false;
+      const rule = parseNoticeProbabilityRule_(item);
+      return !rule || rule.valid;
+    });
+  }
+
+  function parseNoticeProbabilityRule_(item) {
+    const link = String(item && item.link || "").trim();
+    if (!link.includes("%") || /^https?:\/\//i.test(link)) return null;
+    const looksLikeProbability = /^\s*(?:[+-]?\d|\{)/.test(link);
+    if (!looksLikeProbability) return null;
+
+    const strictRuleSyntax = /^\s*\d+(?:\.\d+)?\s*%(?:\s*,\s*\d+(?:\.\d+)?\s*%)*\s*$/.test(link);
+    if (!strictRuleSyntax) {
+      return { recognized: true, valid: false, probabilities: [], hasVariants: false };
     }
 
-    const text = String(input || "").trim();
-    if (!text) return [];
-    return [{ text, link: "" }];
+    const tokenRegex = /(\d+(?:\.\d+)?)\s*%/g;
+    const matches = Array.from(link.matchAll(tokenRegex));
+    const rawProbabilities = matches.map(match => Number(match[1]));
+    const allPositive = rawProbabilities.every(value => Number.isFinite(value) && value > 0);
+    const probabilities = rawProbabilities.map(value => Math.min(100, value));
+    const text = String(item && item.text || "");
+    const separatorCount = (text.match(/ㅨ/g) || []).length;
+    const validCount = separatorCount === 0
+      ? probabilities.length === 1
+      : probabilities.length === separatorCount;
+
+    return {
+      recognized: true,
+      valid: allPositive && validCount,
+      probabilities,
+      hasVariants: separatorCount > 0
+    };
+  }
+
+  function selectNoticeItemForCycle_(item) {
+    const rule = parseNoticeProbabilityRule_(item);
+    if (!rule) return item;
+    if (!rule.valid) return null;
+
+    const text = String(item && item.text || "");
+    if (!rule.hasVariants) {
+      return Math.random() * 100 < rule.probabilities[0]
+        ? { ...item, link: "" }
+        : null;
+    }
+
+    const variants = text.split("ㅨ");
+    for (let index = 0; index < rule.probabilities.length; index += 1) {
+      if (Math.random() * 100 < rule.probabilities[index]) {
+        const chosenText = String(variants[index] || "").trim();
+        return chosenText ? { ...item, text: chosenText, link: "" } : null;
+      }
+    }
+    const fallbackText = String(variants[variants.length - 1] || "").trim();
+    return fallbackText ? { ...item, text: fallbackText, link: "" } : null;
+  }
+
+  function buildNoticeSetHtml_(items) {
+    const separatorHtml = '<span class="notice-separator">　　／　　</span>';
+    const displayedItems = (Array.isArray(items) ? items : [])
+      .map(selectNoticeItemForCycle_)
+      .filter(item => item && String(item.text || "").trim());
+    if (!displayedItems.length) return "";
+    return displayedItems.map(formatNoticeItemHtml).join(separatorHtml) + separatorHtml;
   }
 
   function extractSettingsFromRows(rows) {
@@ -5245,7 +5323,40 @@
   }
 
   function formatNoticeTextHtml(text) {
-    return escapeHtml(text).replace(/\[[^\]]+\]/g, match => `<strong>${match}</strong>`);
+    const source = String(text || "");
+    const imageToken = /\[img:([^\]]+)\]/gi;
+    let html = "";
+    let cursor = 0;
+    let match;
+    const formatText = value => escapeHtml(value).replace(/\[[^\]]+\]/g, token => `<strong>${token}</strong>`);
+
+    while ((match = imageToken.exec(source)) !== null) {
+      html += formatText(source.slice(cursor, match.index));
+      const imageUrl = resolveNoticeImageUrl_(match[1]);
+      if (imageUrl) {
+        html += `<img class="notice-inline-image" src="${escapeHtml(imageUrl)}" alt="" width="18" height="18" loading="eager" decoding="async" draggable="false">`;
+      } else {
+        html += formatText(match[0]);
+      }
+      cursor = match.index + match[0].length;
+    }
+    html += formatText(source.slice(cursor));
+    return html;
+  }
+
+  function resolveNoticeImageUrl_(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (/^https?:\/\//i.test(raw)) return sanitizeExternalUrl_(raw);
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) return "";
+
+    const relativePath = raw.replace(/\\/g, "/").replace(/^\/+/, "");
+    try {
+      const resolved = new URL(relativePath, document.baseURI);
+      return resolved.protocol === "https:" || resolved.protocol === "http:" ? resolved.href : "";
+    } catch {
+      return "";
+    }
   }
 
   function getShowcaseScrollState_(kind) {
@@ -5305,8 +5416,6 @@
     }, animate ? 500 : 100);
   }
 
-  // Keep five visual cycles in the DOM. When the active tab reaches an outer cycle,
-  // jump to the equivalent copy two cycles away while preserving its viewport position.
   function normalizeShowcaseVirtualIndex_(kind, track, count) {
     if (!count) return 0;
     let virtualIndex = getShowcaseVirtualIndex_(kind);
@@ -5422,7 +5531,6 @@
 
     const byKey = new Map(indexedItems.map(item => [getCoverDisplayKey_(item), item]));
     const displayItems = coverDisplayIdOrder.map(key => byKey.get(key)).filter(Boolean);
-    // The original index is retained because playlist-add logic resolves entries from coverItems.
     return displayItems;
   }
 
@@ -6624,8 +6732,6 @@
         return { x, y };
       };
 
-      // 클릭/탭은 플레이리스트에 추가하고, PC 우클릭 또는 모바일 길게 누르기는 URL을 엽니다.
-      // UID 기반 추천 목록은 우클릭/길게 누르기로 아무 동작도 하지 않습니다.
       card.addEventListener("contextmenu", event => {
         if (isMobileLongPressCopyEnabled_()) {
           if (longPressTriggered) event.preventDefault();
@@ -6893,7 +6999,6 @@
     const minNoticeWidth = window.matchMedia("(max-width: 720px)").matches ? 24 : 100;
     const titleWidth = titleRect ? titleRect.width : 0;
     const filterWidth = filterRect ? filterRect.width : 42;
-    // Keep enough space for the title, a visible notice sliver, the filter button and both grid gaps.
     const availableWidth = Math.max(42, Math.floor(
       headerRect.width - titleWidth - minNoticeWidth - filterWidth - actionsGap - (headerGap * 2)
     ));
@@ -9192,14 +9297,10 @@
 
     let targetTime;
     if (direction < 0) {
-      // 10초 역방향은 시작점과 10초 이하의 구간에서는 시작점으로 돌아갑니다.
-      // PC 우클릭 30초 역방향은 현재 시점에서 30초를 뺍니다.
       targetTime = isTenSecondSeek && elapsed <= 10 ? segmentStart : currentTime - seekSeconds;
       targetTime = Math.max(segmentStart, targetTime);
     } else {
-      // 좌클릭 10초 이동은 표시상 -00:15 ~ -00:00이면 무시합니다.
       if (isTenSecondSeek && Number.isFinite(remaining) && Math.floor(Math.max(0, remaining)) <= 15) return;
-      // PC 우클릭 30초 이동은 남은 시간이 35초 이하면 무시합니다.
       if (seekSeconds >= 30 && Number.isFinite(remaining) && Math.floor(Math.max(0, remaining)) <= 35) return;
       targetTime = Math.min(segmentEnd, currentTime + seekSeconds);
     }
@@ -9291,9 +9392,6 @@
       }
     }
 
-    // The clock buttons remain useful in ordinary full-video playback, but the title
-    // progress fill is shown only on desktop and only for playlist segments or when
-    // both song timeline/end fields define a valid segment.
     const showTitleProgress = isDesktopTabTitleEnvironment_() && hasSegmentProgress;
     if (showTitleProgress && els.modalSongInfoTop) {
       const progress = duration > 0 ? Math.max(0, Math.min(100, elapsed / duration * 100)) : 0;

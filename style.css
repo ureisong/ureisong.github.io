@@ -783,7 +783,7 @@ html.dark-mode .like-button.liking {
 
 @keyframes noticeMarquee {
   from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
+  to { transform: translateX(var(--notice-marquee-shift, -50%)); }
 }
 
 .cover-panel { position: relative; }
@@ -4235,5 +4235,42 @@ body {
 @media (max-width: 720px) {
   .cover-showcase-layout > .cover-feature {
     min-height: 250px;
+  }
+}
+
+.notice-inline-image {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  max-width: 18px;
+  max-height: 18px;
+  object-fit: contain;
+  vertical-align: middle;
+  flex: 0 0 18px;
+  border-radius: 2px;
+}
+
+@media (max-width: 720px) {
+  .summary-status-wrap {
+    align-self: stretch;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-left: 0;
+    text-align: right;
+  }
+
+  .summary-status-wrap .filter-active-status,
+  .summary-status-wrap .summary-cooldown {
+    left: auto;
+    right: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
   }
 }
