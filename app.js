@@ -235,6 +235,8 @@
     youtubeFrameWrap: document.getElementById("youtubeFrameWrap"),
     filterDetails: document.getElementById("filterDetails"),
     filterToggleButton: document.getElementById("filterToggleButton"),
+    scrollSectionButton: document.getElementById("scrollSectionButton"),
+    siteFooter: document.querySelector(".site-footer"),
     statusBox: document.getElementById("statusBox"),
     statusToggleButton: document.getElementById("statusToggleButton"),
     statusBoxContent: document.getElementById("statusBoxContent"),
@@ -397,6 +399,15 @@
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
+    if (!isLocalDevelopmentHost_()) {
+      const startupSettingsRows = await loadSettingsRows(true);
+      currentSettingsRows = startupSettingsRows;
+      if (shouldShowMaintenanceScreen_(startupSettingsRows)) {
+        renderMaintenanceScreen_();
+        return;
+      }
+    }
+
     const initialSongId = getInitialSongIdQuery_();
     const initialCachedPayload = initialSongId ? readLocalJsonCache() : null;
     const canTryInitialCache = Boolean(initialSongId && initialCachedPayload);
@@ -434,6 +445,32 @@
     if (!openedInitialFromCache) handleInitialSongIdQuery_();
   }
   
+  function isLocalDevelopmentHost_() {
+    const hostname = String(window.location && window.location.hostname || "").trim().toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]" || hostname.endsWith(".localhost");
+  }
+
+  function shouldShowMaintenanceScreen_(settingsRows) {
+    const value = String(getSettingValue(settingsRows, "site_open") || "").trim().toUpperCase();
+    return value === "FALSE";
+  }
+
+  function renderMaintenanceScreen_() {
+    document.documentElement.classList.add("site-maintenance");
+    document.body.classList.add("site-maintenance");
+
+    const screen = document.createElement("main");
+    screen.id = "maintenanceScreen";
+    screen.setAttribute("role", "status");
+    screen.setAttribute("aria-live", "polite");
+
+    const message = document.createElement("div");
+    message.className = "maintenance-screen-text";
+    message.textContent = "점검중";
+    screen.appendChild(message);
+    document.body.appendChild(screen);
+  }
+
   function bindResponsiveRender() {
     if (!window.matchMedia) return;
     const mq = window.matchMedia("(max-width: 560px)");
@@ -497,16 +534,29 @@
         setStatusBoxExpanded_(!(els.statusBox && els.statusBox.classList.contains("is-expanded")));
       });
     }
+    if (els.scrollSectionButton) {
+      els.scrollSectionButton.addEventListener("click", event => {
+        event.preventDefault();
+        if (els.scrollSectionButton.classList.contains("is-idle-image")) return;
+        scrollToNextSectionFromHeader_();
+      });
+    }
+    document.querySelectorAll(".layout > details.panel-details").forEach(section => {
+      section.addEventListener("toggle", () => window.requestAnimationFrame(updateScrollSectionButtonState_));
+    });
+    window.addEventListener("scroll", updateScrollSectionButtonState_, { passive: true });
     window.addEventListener("resize", () => {
       if (els.statusBox && els.statusBox.classList.contains("is-expanded")) {
         window.requestAnimationFrame(fitStatusBoxToHeader_);
       }
       scheduleNoticeMarqueeLayout_();
       scheduleSungGroupTitleMarquee_();
+      refreshCooldownStatusLayout_();
+      updateScrollSectionButtonState_();
     }, { passive: true });
+    window.requestAnimationFrame(updateScrollSectionButtonState_);
     document.addEventListener("click", event => {
       const target = event.target;
-
       window.setTimeout(() => {
         if (els.filterDetails && els.filterDetails.open &&
             !els.filterDetails.contains(target) &&
@@ -1083,13 +1133,13 @@
       .trim();
   }
 
-  function loadSettingsRows() {
+  function loadSettingsRows(forceNetwork = false) {
     if (!SETTINGS_CSV_URL) return Promise.resolve([]);
     if (settingsRowsPromise) return settingsRowsPromise;
 
     settingsRowsPromise = (async () => {
       try {
-        const text = await fetchText(SETTINGS_CSV_URL, false);
+        const text = await fetchText(SETTINGS_CSV_URL, forceNetwork);
         const rows = parseCsv(text);
         if (!rows.length) throw new Error("설정 CSV가 비어 있습니다.");
         return rows;
@@ -2942,6 +2992,109 @@
     window.requestAnimationFrame(() => {
       window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     });
+  }
+
+  function getScrollableContentSections_() {
+    return Array.from(document.querySelectorAll(".layout > details.panel-details"));
+  }
+
+  function getScrollSectionButtonMode_() {
+    const sections = getScrollableContentSections_();
+    const hasExpandedSection = sections.some(section => section.open);
+    const footer = els.siteFooter || document.querySelector(".site-footer");
+    const documentElement = document.documentElement;
+    const body = document.body;
+    const pageHeight = Math.max(
+      documentElement ? documentElement.scrollHeight : 0,
+      body ? body.scrollHeight : 0
+    );
+    const hasVerticalScrollbar = pageHeight > window.innerHeight + 1;
+
+    if (!hasExpandedSection && !hasVerticalScrollbar) return "idle-image";
+
+    if (hasExpandedSection && footer) {
+      const footerRect = footer.getBoundingClientRect();
+      if (footerRect.top >= 0 && footerRect.bottom <= window.innerHeight) return "up";
+    }
+    return "down";
+  }
+
+  function isScrollSectionButtonInUpMode_() {
+    return getScrollSectionButtonMode_() === "up";
+  }
+
+  function updateScrollSectionButtonState_() {
+    const button = els.scrollSectionButton;
+    if (!button) return;
+
+    const mode = getScrollSectionButtonMode_();
+    const isIdleImage = mode === "idle-image";
+    const wasIdleImage = button.classList.contains("is-idle-image");
+    const scrollUp = mode === "up";
+    button.classList.toggle("is-scroll-up", scrollUp);
+    button.classList.toggle("is-idle-image", isIdleImage);
+
+    if (isIdleImage) {
+      if (!wasIdleImage) {
+        const imagePaths = [
+          "img/GIF_Cchizizik.gif",
+          "img/PNG_UrangHihi.png",
+          "img/PNG_UrangGrrrrr.png"
+        ];
+        const imagePath = imagePaths[Math.floor(Math.random() * imagePaths.length)];
+        const image = document.createElement("img");
+        image.className = "scroll-section-idle-image";
+        image.src = `./${imagePath}`;
+        image.alt = "";
+        image.draggable = false;
+        image.setAttribute("aria-hidden", "true");
+        button.replaceChildren(image);
+      }
+      button.setAttribute("aria-disabled", "true");
+      button.setAttribute("aria-label", "장식 이미지");
+      button.title = "";
+      return;
+    }
+
+    if (wasIdleImage) button.replaceChildren();
+    button.setAttribute("aria-disabled", "false");
+    const label = scrollUp ? "위로 스크롤" : "아래로 스크롤";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function scrollToNextSectionFromHeader_() {
+    updateScrollSectionButtonState_();
+    if (els.scrollSectionButton?.classList.contains("is-idle-image")) return;
+    if (isScrollSectionButtonInUpMode_()) {
+      scrollToPageTop();
+      return;
+    }
+
+    const sections = getScrollableContentSections_();
+    const footer = els.siteFooter || document.querySelector(".site-footer");
+    if (!sections.length) {
+      if (footer) scrollElementBelowStickyHeader_(footer, { behavior: "smooth", offset: 10 });
+      return;
+    }
+
+    const header = document.querySelector(".site-header");
+    const headerRect = header ? header.getBoundingClientRect() : null;
+    const headerBottom = headerRect ? headerRect.bottom : 0;
+    const anchorLine = headerBottom + 24;
+    const currentIndex = sections.findIndex(section => {
+      const rect = section.getBoundingClientRect();
+      return rect.top <= anchorLine && rect.bottom > anchorLine;
+    });
+
+    let target = null;
+    if (currentIndex >= 0) {
+      target = sections[currentIndex + 1] || footer;
+    } else {
+      target = sections.find(section => section.getBoundingClientRect().top > anchorLine) || footer || sections[0];
+    }
+
+    if (target) scrollElementBelowStickyHeader_(target, { behavior: "smooth", offset: 10 });
   }
 
   function scrollElementBelowStickyHeader_(element, options = {}) {
@@ -7085,15 +7238,17 @@
 
     const headerRect = headerMain.getBoundingClientRect();
     const titleRect = headerMain.querySelector("h1")?.getBoundingClientRect();
+    const scrollRect = els.scrollSectionButton?.getBoundingClientRect();
     const filterRect = els.filterToggleButton?.getBoundingClientRect();
     const headerActions = headerMain.querySelector(".header-actions");
     const headerGap = Number.parseFloat(getComputedStyle(headerMain).columnGap) || 8;
     const actionsGap = headerActions ? (Number.parseFloat(getComputedStyle(headerActions).columnGap) || 8) : 8;
     const minNoticeWidth = window.matchMedia("(max-width: 720px)").matches ? 24 : 100;
     const titleWidth = titleRect ? titleRect.width : 0;
+    const scrollWidth = scrollRect ? scrollRect.width : 0;
     const filterWidth = filterRect ? filterRect.width : 42;
     const availableWidth = Math.max(42, Math.floor(
-      headerRect.width - titleWidth - minNoticeWidth - filterWidth - actionsGap - (headerGap * 2)
+      headerRect.width - scrollWidth - titleWidth - minNoticeWidth - filterWidth - actionsGap - (headerGap * 3)
     ));
     els.statusBox.style.setProperty("--status-box-max-width", `${availableWidth}px`);
 
@@ -10022,15 +10177,48 @@
       return 0;
     }
 
-    const durationMs = Math.ceil(((textWidth + viewportWidth) / COOLDOWN_STATUS_MARQUEE_SPEED_PX_PER_SECOND) * 1000);
-    els.cooldownStatus.style.setProperty("--cooldown-marquee-start", `${textWidth}px`);
-    els.cooldownStatus.style.setProperty("--cooldown-marquee-end", `${-viewportWidth}px`);
+    const overflowWidth = Math.max(0, textWidth - viewportWidth);
+    const durationMs = Math.ceil((overflowWidth / COOLDOWN_STATUS_MARQUEE_SPEED_PX_PER_SECOND) * 1000);
+    els.cooldownStatus.style.setProperty("--cooldown-marquee-start", "0px");
+    els.cooldownStatus.style.setProperty("--cooldown-marquee-end", `${-overflowWidth}px`);
     els.cooldownStatus.style.setProperty("--cooldown-marquee-duration", `${durationMs}ms`);
     els.cooldownStatus.dataset.marqueeDurationMs = String(durationMs);
     els.cooldownStatus.classList.add("cooldown-status-marquee");
     textElement.style.removeProperty("animation");
     textElement.style.removeProperty("transform");
     return durationMs;
+  }
+
+  function scheduleCooldownStatusAutoHide_(value, marqueeDurationMs) {
+    if (!els.cooldownStatus || !value || value.startsWith("좋아요 쿨타임")) return;
+    window.clearTimeout(cooldownClearTimer);
+    const displayDurationMs = marqueeDurationMs > 0 ? 3000 + marqueeDurationMs + 900 : 3000;
+    cooldownClearTimer = window.setTimeout(() => {
+      const currentTextElement = getCooldownStatusTextElement_();
+      if (!els.cooldownStatus || !currentTextElement || currentTextElement.textContent !== value ||
+          currentTextElement.textContent.startsWith("좋아요 쿨타임")) return;
+      document.body.classList.remove("cooldown-status-visible");
+      cooldownCrossfadeTimer = window.setTimeout(() => {
+        if (els.cooldownStatus && !document.body.classList.contains("cooldown-status-visible")) {
+          const textElement = getCooldownStatusTextElement_();
+          if (textElement) textElement.textContent = "";
+          els.cooldownStatus.classList.remove("cooldown-status-marquee");
+          els.cooldownStatus.style.removeProperty("--cooldown-marquee-start");
+          els.cooldownStatus.style.removeProperty("--cooldown-marquee-end");
+          els.cooldownStatus.style.removeProperty("--cooldown-marquee-duration");
+          els.cooldownStatus.dataset.marqueeDurationMs = "0";
+        }
+      }, 260);
+    }, displayDurationMs);
+  }
+
+  function refreshCooldownStatusLayout_() {
+    if (!els.cooldownStatus || !document.body.classList.contains("cooldown-status-visible")) return;
+    const textElement = getCooldownStatusTextElement_();
+    const value = textElement ? textElement.textContent : "";
+    if (!value) return;
+    const durationMs = configureCooldownStatusMarquee_();
+    if (!value.startsWith("좋아요 쿨타임")) scheduleCooldownStatusAutoHide_(value, durationMs);
   }
 
   function setCooldownStatusText_(text, autoHide = true) {
@@ -10052,26 +10240,7 @@
     }
 
     document.body.classList.toggle("cooldown-status-visible", Boolean(value));
-
-    if (autoHide && value) {
-      const displayDurationMs = marqueeDurationMs > 0 ? marqueeDurationMs + 900 : 3000;
-      cooldownClearTimer = window.setTimeout(() => {
-        if (els.cooldownStatus && !els.cooldownStatus.textContent.startsWith("좋아요 쿨타임")) {
-          document.body.classList.remove("cooldown-status-visible");
-          cooldownCrossfadeTimer = window.setTimeout(() => {
-            if (els.cooldownStatus && !document.body.classList.contains("cooldown-status-visible")) {
-              const currentTextElement = getCooldownStatusTextElement_();
-              if (currentTextElement) currentTextElement.textContent = "";
-              els.cooldownStatus.classList.remove("cooldown-status-marquee");
-              els.cooldownStatus.style.removeProperty("--cooldown-marquee-start");
-              els.cooldownStatus.style.removeProperty("--cooldown-marquee-end");
-              els.cooldownStatus.style.removeProperty("--cooldown-marquee-duration");
-              els.cooldownStatus.dataset.marqueeDurationMs = "0";
-            }
-          }, 260);
-        }
-      }, displayDurationMs);
-    }
+    if (autoHide && value) scheduleCooldownStatusAutoHide_(value, marqueeDurationMs);
   }
 
   function showCooldownText(text) {
