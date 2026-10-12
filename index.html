@@ -59,7 +59,7 @@
           <div class="field search-field">
             <label for="searchInput"><span>검색</span></label>
             <div class="search-row">
-              <input id="searchInput" type="search" placeholder="검색어 입력" autocomplete="off" />
+              <input id="searchInput" type="search" placeholder="검색어 입력" autocomplete="off" maxlength="100" />
               <div class="search-row-actions">
                 <select id="searchMode" aria-label="검색 범위">
                   <option value="all" selected>전체</option>
@@ -117,7 +117,7 @@
       <div class="summary-spacer" aria-hidden="true"></div>
       <div class="summary-status-wrap">
         <div class="filter-active-status"><strong id="resultCount">0</strong>곡 필터 적용 중…</div>
-        <div id="cooldownStatus" class="cooldown summary-cooldown" aria-live="polite"></div>
+        <div id="cooldownStatus" class="cooldown summary-cooldown" aria-live="polite"><span class="cooldown-status-text"></span></div>
       </div>
     </section>
 

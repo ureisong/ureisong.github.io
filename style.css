@@ -200,7 +200,6 @@ h1 {
 .status-box .cooldown { order: 3; }
 
 .cooldown {
-  margin-top: 4px;
   color: var(--accent);
   font-weight: 700;
 }
@@ -369,7 +368,12 @@ h1 {
 .filter-active-status,
 .summary-cooldown {
   position: absolute;
-  inset: 0 0 auto auto;
+  inset: 0;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: right;
   transition: opacity 0.26s ease, transform 0.26s ease;
 }
 
@@ -380,6 +384,25 @@ h1 {
   opacity: 0;
   transform: translateY(4px);
   pointer-events: none;
+  text-overflow: clip;
+}
+
+.cooldown-status-text {
+  display: inline-block;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.summary-cooldown.cooldown-status-marquee .cooldown-status-text {
+  animation: cooldown-status-marquee var(--cooldown-marquee-duration, 8s) linear forwards;
+  will-change: transform;
+}
+
+@keyframes cooldown-status-marquee {
+  from { transform: translateX(var(--cooldown-marquee-start, 0px)); }
+  to { transform: translateX(var(--cooldown-marquee-end, 0px)); }
 }
 
 body.cooldown-status-visible .filter-active-status {
@@ -474,6 +497,12 @@ body.cooldown-status-visible .summary-cooldown {
   cursor: pointer;
 }
 
+.song-title-missing:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
 .song-title-clickable:hover .song-title-button {
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -485,7 +514,7 @@ body.cooldown-status-visible .summary-cooldown {
 
 .song-title-missing {
   color: var(--muted);
-  cursor: help;
+  cursor: pointer;
   font-weight: 500;
   font-style: italic;
 }
@@ -729,12 +758,39 @@ html.dark-mode .like-button.liking {
 }
 
 .date-group-title.collapsed::after { transform: rotate(-45deg); }
-.date-group-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.date-group-count { margin-left: auto; color: var(--muted); font-size: 12px; flex: 0 0 auto; white-space: nowrap; }
 .date-group-count[role="button"] { cursor: pointer; }
 .date-group-count[role="button"]:hover { color: var(--accent); }
 .date-group > .song-list { padding: 10px; }
 .date-group > .song-list.collapsed { display: none; }
-.sung-group .date-group-title span:first-child { overflow-wrap: anywhere; }
+.sung-group .date-group-title {
+  min-width: 0;
+}
+.sung-group .date-group-title::after {
+  flex: 0 0 8px;
+}
+.sung-group .date-group-title .sung-group-label {
+  display: block;
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.sung-group-label:not(.modal-marquee-active) .modal-marquee-inner {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sung-group-label.modal-marquee-active .modal-marquee-inner {
+  display: inline-block;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+}
 
 .notice-viewport {
   width: 100%;
@@ -4265,12 +4321,21 @@ body {
 
   .summary-status-wrap .filter-active-status,
   .summary-status-wrap .summary-cooldown {
-    left: auto;
+    left: 0;
     right: 0;
+    width: 100%;
     max-width: 100%;
     box-sizing: border-box;
     overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;
     text-align: right;
+  }
+
+  .summary-status-wrap .filter-active-status {
+    text-overflow: ellipsis;
+  }
+
+  .summary-status-wrap .summary-cooldown {
+    text-overflow: clip;
   }
 }

@@ -53,6 +53,13 @@
   const TAB_TITLE_MARQUEE_END_HOLD_MS = 2200;
   const TAB_TITLE_MARQUEE_REPEAT = true;
   const TAB_TITLE_MARQUEE_GAP = "　　　　　　　　　　　　";
+  const COOLDOWN_STATUS_MARQUEE_SPEED_PX_PER_SECOND = 36;
+  const RANDOM_RECOMMEND_EXCLUSION_RULES = [
+    {
+      id: "title-character-duet-markers",
+      patterns: [/\[뜌땨\]/u, /🐤/u, /\[불법레이\]/u, /🍥/u]
+    }
+  ];
 
   const RECOMMEND_LIMITS = {
     random: 5,
@@ -337,6 +344,7 @@
   let currentNoticeItems = [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
   let noticeLayoutRaf = 0;
   let noticeResizeObserver = null;
+  let sungGroupTitleMarqueeRaf = 0;
   let currentNoticeSampledSetHtml = null;
   let currentFooterText = FOOTER_TEXT;
   let playlistEnabled = false;
@@ -494,6 +502,7 @@
         window.requestAnimationFrame(fitStatusBoxToHeader_);
       }
       scheduleNoticeMarqueeLayout_();
+      scheduleSungGroupTitleMarquee_();
     }, { passive: true });
     document.addEventListener("click", event => {
       const target = event.target;
@@ -633,6 +642,7 @@
         if (els.sungDetails.open) {
           const isFilterDrivenOpen = suppressSungOpenSideEffects_;
           suppressSungOpenSideEffects_ = false;
+          scheduleSungGroupTitleMarquee_();
           if (!isFilterDrivenOpen) {
             setFilterDetailsOpen_(false);
             if (els.recommendDetails) els.recommendDetails.open = false;
@@ -1896,7 +1906,7 @@
 
   function isMobileLongPressCopyEnabled_() {
     if (!window.matchMedia) return false;
-    return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+    return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
   }
 
   function clearDateGroupLongPressTimer_() {
@@ -2336,7 +2346,7 @@
       return `
         <section class="date-group sung-group">
           <button class="date-group-title ${collapsed ? "collapsed" : ""}" type="button" data-date-group-toggle="${escapeHtml(key)}">
-            <span>${escapeHtml(group.label)}</span>
+            <span class="sung-group-label" data-sung-group-label="${escapeHtml(group.label)}" title="${escapeHtml(group.label)}"><span class="modal-marquee-inner">${escapeHtml(group.label)}</span></span>
             <span class="date-group-count">${group.items.length}곡</span>
           </button>
           <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${collapsed ? "" : (group.songbookOnly ? '<div class="empty sung-no-broadcast">등록된 방송 데이터가 없습니다</div>' : group.items.map(renderSongCard).join(""))}</div>
@@ -2359,6 +2369,45 @@
     bindPlaylistAddButtons(els.sungList);
     bindDateGroupToggles(els.sungList, "sung");
     bindSungMoreButton();
+    scheduleSungGroupTitleMarquee_();
+  }
+
+  function scheduleSungGroupTitleMarquee_() {
+    if (sungGroupTitleMarqueeRaf) window.cancelAnimationFrame(sungGroupTitleMarqueeRaf);
+    sungGroupTitleMarqueeRaf = window.requestAnimationFrame(() => {
+      sungGroupTitleMarqueeRaf = 0;
+      updateSungGroupTitleMarquee_();
+    });
+  }
+
+  function updateSungGroupTitleMarquee_() {
+    if (!els.sungList) return;
+    els.sungList.querySelectorAll(".sung-group-label").forEach(label => {
+      const inner = label.querySelector(".modal-marquee-inner");
+      if (!inner) return;
+
+      label.classList.remove("modal-marquee-active");
+      label.style.removeProperty("--modal-marquee-distance");
+      label.style.removeProperty("--modal-marquee-duration");
+
+      const previousStyle = inner.getAttribute("style");
+      inner.style.display = "inline-block";
+      inner.style.width = "max-content";
+      inner.style.maxWidth = "none";
+      inner.style.overflow = "visible";
+      inner.style.textOverflow = "clip";
+      const textWidth = inner.getBoundingClientRect().width;
+      const availableWidth = label.clientWidth;
+      if (previousStyle === null) inner.removeAttribute("style");
+      else inner.setAttribute("style", previousStyle);
+
+      const distance = Math.ceil(textWidth - availableWidth);
+      if (availableWidth <= 0 || distance <= 2) return;
+      const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+      label.style.setProperty("--modal-marquee-distance", `${distance}px`);
+      label.style.setProperty("--modal-marquee-duration", `${4 + moveSeconds * 2}s`);
+      label.classList.add("modal-marquee-active");
+    });
   }
 
   function renderSungGroupBody(key, body) {
@@ -2580,7 +2629,8 @@
   }
 
   function renderMultiValueBadges(values, filterType, extraClass = "", fallback = "") {
-    const list = (values && values.length ? values : [fallback]).filter(Boolean);
+    const source = (values && values.length ? values : [fallback]).filter(Boolean);
+    const list = source.filter(value => String(value).trim() !== "-");
     const className = ["badge", "badge-button", extraClass].filter(Boolean).join(" ");
 
     return list.map(value => `
@@ -2641,6 +2691,21 @@
         if (event.target.closest("button, a, input, select, textarea")) return;
         const button = title.querySelector("[data-youtube-url]");
         if (button) button.click();
+      });
+    });
+
+    root.querySelectorAll("[data-unprocessed-song-title]").forEach(title => {
+      if (title.dataset.unprocessedSongTitleBound === "1") return;
+      title.dataset.unprocessedSongTitleBound = "1";
+      const showPendingSongNotice = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        showLikeNoticeModal("[알림]", "아직 처리되지 않은 곡입니다![img:img/PNG_Nung.png]");
+      };
+      title.addEventListener("click", showPendingSongNotice);
+      title.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        showPendingSongNotice(event);
       });
     });
   }
@@ -3083,7 +3148,7 @@
     const titleAttr = titleTooltip ? ` title="${escapeHtml(titleTooltip)}"` : "";
     const titleCoreHtml = song.link
       ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-end="${escapeHtml(song.end || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
-      : `<span class="song-title-missing" title="${escapeHtml(titleTooltip || "다시보기가 없습니다")}">${escapeHtml(titleText)}</span>`;
+      : `<span class="song-title-missing" role="button" tabindex="0" data-unprocessed-song-title="1" aria-label="${escapeHtml(`${titleText} · 아직 처리되지 않은 곡`)}" title="${escapeHtml(titleTooltip || "아직 처리되지 않은 곡입니다")}">${escapeHtml(titleText)}</span>`;
 
     const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
     const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
@@ -3496,8 +3561,20 @@
     return isRandomRecommendCandidate(song);
   }
 
+  function getRandomRecommendExclusionRuleId_(song) {
+    if (!song) return "";
+    const titleText = [...getTitleValues(song), getDisplayTitle(song)]
+      .map(value => String(value || ""))
+      .join(" ");
+
+    for (const rule of RANDOM_RECOMMEND_EXCLUSION_RULES) {
+      if ((rule.patterns || []).some(pattern => pattern.test(titleText))) return rule.id;
+    }
+    return "";
+  }
+
   function isRandomRecommendCandidate(song) {
-    if (!song) return false;
+    if (!song || getRandomRecommendExclusionRuleId_(song)) return false;
 
     const link = String(song.link || "").trim();
     const timeline = String(song.timeline || "").trim();
@@ -4885,15 +4962,22 @@
     const probabilities = rawProbabilities.map(value => Math.min(100, value));
     const text = String(item && item.text || "");
     const separatorCount = (text.match(/ㅨ/g) || []).length;
+    const variantCount = separatorCount + 1;
     const validCount = separatorCount === 0
       ? probabilities.length === 1
-      : probabilities.length === separatorCount;
+      : probabilities.length === separatorCount || probabilities.length === variantCount;
+    const probabilityMode = separatorCount === 0
+      ? "single"
+      : probabilities.length === variantCount
+        ? "explicit"
+        : "remainder";
 
     return {
       recognized: true,
       valid: allPositive && validCount,
       probabilities,
-      hasVariants: separatorCount > 0
+      hasVariants: separatorCount > 0,
+      probabilityMode
     };
   }
 
@@ -4910,12 +4994,21 @@
     }
 
     const variants = text.split("ㅨ");
+    const roll = Math.random() * 100;
+    let cumulativeProbability = 0;
     for (let index = 0; index < rule.probabilities.length; index += 1) {
-      if (Math.random() * 100 < rule.probabilities[index]) {
+      const remainingProbability = Math.max(0, 100 - cumulativeProbability);
+      const effectiveProbability = Math.min(rule.probabilities[index], remainingProbability);
+      const nextBoundary = cumulativeProbability + effectiveProbability;
+      if (roll >= cumulativeProbability && roll < nextBoundary) {
         const chosenText = String(variants[index] || "").trim();
         return chosenText ? { ...item, text: chosenText, link: "" } : null;
       }
+      cumulativeProbability = nextBoundary;
     }
+
+    if (rule.probabilityMode === "explicit") return null;
+
     const fallbackText = String(variants[variants.length - 1] || "").trim();
     return fallbackText ? { ...item, text: fallbackText, link: "" } : null;
   }
@@ -7113,10 +7206,13 @@
     const safeMessage = String(message || "");
 
     if (els.likeNoticeModalMessage) {
+      const safeMessageHtml = /\[img:[^\]]+\]/i.test(safeMessage)
+        ? formatNoticeTextHtml(safeMessage).replace(/\r?\n/g, "<br>")
+        : escapeHtmlWithBr(safeMessage);
       els.likeNoticeModalMessage.innerHTML = `
         <strong class="mini-modal-title">${escapeHtml(safeTitle)}</strong>
         <span class="mini-modal-separator" aria-hidden="true"></span>
-        <span class="mini-modal-body">${escapeHtmlWithBr(safeMessage)}</span>
+        <span class="mini-modal-body">${safeMessageHtml}</span>
       `;
     }
     window.clearTimeout(likeDisabledModalTimer);
@@ -9890,25 +9986,91 @@
     }, 250);
   }
 
+  function getCooldownStatusTextElement_() {
+    if (!els.cooldownStatus) return null;
+    let textElement = els.cooldownStatus.querySelector(".cooldown-status-text");
+    if (!textElement) {
+      textElement = document.createElement("span");
+      textElement.className = "cooldown-status-text";
+      els.cooldownStatus.replaceChildren(textElement);
+    }
+    return textElement;
+  }
+
+  function configureCooldownStatusMarquee_() {
+    if (!els.cooldownStatus) return 0;
+    const textElement = getCooldownStatusTextElement_();
+    els.cooldownStatus.classList.remove("cooldown-status-marquee");
+    els.cooldownStatus.style.removeProperty("--cooldown-marquee-start");
+    els.cooldownStatus.style.removeProperty("--cooldown-marquee-end");
+    els.cooldownStatus.style.removeProperty("--cooldown-marquee-duration");
+
+    if (!textElement || !textElement.textContent) {
+      els.cooldownStatus.dataset.marqueeDurationMs = "0";
+      return 0;
+    }
+
+    textElement.style.animation = "none";
+    textElement.style.transform = "none";
+    void textElement.offsetWidth;
+    const viewportWidth = els.cooldownStatus.clientWidth;
+    const textWidth = Math.ceil(textElement.scrollWidth);
+    if (viewportWidth <= 0 || textWidth <= viewportWidth + 2) {
+      textElement.style.removeProperty("animation");
+      textElement.style.removeProperty("transform");
+      els.cooldownStatus.dataset.marqueeDurationMs = "0";
+      return 0;
+    }
+
+    const durationMs = Math.ceil(((textWidth + viewportWidth) / COOLDOWN_STATUS_MARQUEE_SPEED_PX_PER_SECOND) * 1000);
+    els.cooldownStatus.style.setProperty("--cooldown-marquee-start", `${textWidth}px`);
+    els.cooldownStatus.style.setProperty("--cooldown-marquee-end", `${-viewportWidth}px`);
+    els.cooldownStatus.style.setProperty("--cooldown-marquee-duration", `${durationMs}ms`);
+    els.cooldownStatus.dataset.marqueeDurationMs = String(durationMs);
+    els.cooldownStatus.classList.add("cooldown-status-marquee");
+    textElement.style.removeProperty("animation");
+    textElement.style.removeProperty("transform");
+    return durationMs;
+  }
+
   function setCooldownStatusText_(text, autoHide = true) {
     if (!els.cooldownStatus) return;
     const value = String(text || "");
+    const textElement = getCooldownStatusTextElement_();
+    const previousValue = textElement ? textElement.textContent : els.cooldownStatus.textContent;
+    const wasVisible = document.body.classList.contains("cooldown-status-visible");
     window.clearTimeout(cooldownClearTimer);
     window.clearTimeout(cooldownCrossfadeTimer);
-    els.cooldownStatus.textContent = value;
+
+    let marqueeDurationMs = Number(els.cooldownStatus.dataset.marqueeDurationMs || 0);
+    if (previousValue !== value || (value && !wasVisible)) {
+      if (textElement) textElement.textContent = value;
+      else els.cooldownStatus.textContent = value;
+      marqueeDurationMs = configureCooldownStatusMarquee_();
+    } else if (!value) {
+      marqueeDurationMs = 0;
+    }
+
     document.body.classList.toggle("cooldown-status-visible", Boolean(value));
 
     if (autoHide && value) {
+      const displayDurationMs = marqueeDurationMs > 0 ? marqueeDurationMs + 900 : 3000;
       cooldownClearTimer = window.setTimeout(() => {
         if (els.cooldownStatus && !els.cooldownStatus.textContent.startsWith("좋아요 쿨타임")) {
           document.body.classList.remove("cooldown-status-visible");
           cooldownCrossfadeTimer = window.setTimeout(() => {
             if (els.cooldownStatus && !document.body.classList.contains("cooldown-status-visible")) {
-              els.cooldownStatus.textContent = "";
+              const currentTextElement = getCooldownStatusTextElement_();
+              if (currentTextElement) currentTextElement.textContent = "";
+              els.cooldownStatus.classList.remove("cooldown-status-marquee");
+              els.cooldownStatus.style.removeProperty("--cooldown-marquee-start");
+              els.cooldownStatus.style.removeProperty("--cooldown-marquee-end");
+              els.cooldownStatus.style.removeProperty("--cooldown-marquee-duration");
+              els.cooldownStatus.dataset.marqueeDurationMs = "0";
             }
           }, 260);
         }
-      }, 3000);
+      }, displayDurationMs);
     }
   }
 
