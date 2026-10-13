@@ -826,6 +826,13 @@ html.dark-mode .like-button.liking {
   will-change: transform;
 }
 
+.notice-set {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: max-content;
+}
+
 .notice-content {
   display: inline-flex;
   align-items: center;

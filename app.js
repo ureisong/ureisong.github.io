@@ -347,7 +347,7 @@
   let noticeLayoutRaf = 0;
   let noticeResizeObserver = null;
   let sungGroupTitleMarqueeRaf = 0;
-  let currentNoticeSampledSetHtml = null;
+  let currentNoticeSampledSetsHtml = null;
   let currentFooterText = FOOTER_TEXT;
   let playlistEnabled = false;
   let pendingPlaylistNameAction = "";
@@ -5004,7 +5004,7 @@
     const items = normalizeNoticeItems(input);
     const normalizedItems = items.length ? items : [{ text: DEFAULT_NOTICE_TEXT, link: "" }];
     currentNoticeItems = normalizedItems;
-    currentNoticeSampledSetHtml = null;
+    currentNoticeSampledSetsHtml = null;
 
     els.noticeText.innerHTML = `
       <span class="notice-track">
@@ -5027,7 +5027,7 @@
   }
 
   function rerollNoticeSetAndSchedule_() {
-    currentNoticeSampledSetHtml = buildNoticeSetHtml_(currentNoticeItems);
+    currentNoticeSampledSetsHtml = [];
     scheduleNoticeMarqueeLayout_();
   }
 
@@ -5052,36 +5052,40 @@
       content.style.removeProperty("min-width");
     });
 
-    if (currentNoticeSampledSetHtml === null) {
-      currentNoticeSampledSetHtml = buildNoticeSetHtml_(currentNoticeItems);
-    }
-    const sampledSetHtml = currentNoticeSampledSetHtml;
-    firstContent.innerHTML = sampledSetHtml;
-    const measuredSetWidth = firstContent.getBoundingClientRect().width;
-    const cycleWidth = measuredSetWidth > 0 ? measuredSetWidth : viewport.clientWidth;
-    const primarySetLinkCount = firstContent.querySelectorAll("a").length;
-    const requiredContentWidth = viewport.clientWidth + cycleWidth;
+    if (!Array.isArray(currentNoticeSampledSetsHtml)) currentNoticeSampledSetsHtml = [];
+    const maxSetsPerCycle = 500;
+    const targetCycleWidth = viewport.clientWidth * 2;
+    const appendNoticeSet = setHtml => {
+      if (!setHtml) return;
+      firstContent.insertAdjacentHTML("beforeend", `<span class="notice-set">${setHtml}</span>`);
+    };
 
-    if (sampledSetHtml) {
-      let repeatedSets = 1;
-      const maxCopies = Math.min(500, Math.max(2, Math.ceil(viewport.clientWidth / cycleWidth) + 2));
-      while (firstContent.getBoundingClientRect().width < requiredContentWidth && repeatedSets < maxCopies) {
-        firstContent.insertAdjacentHTML("beforeend", sampledSetHtml);
-        repeatedSets += 1;
-      }
-    }
-
-    if (firstContent.getBoundingClientRect().width < requiredContentWidth) {
-      firstContent.style.minWidth = `${requiredContentWidth}px`;
+    currentNoticeSampledSetsHtml.forEach(appendNoticeSet);
+    let sampledSetCount = currentNoticeSampledSetsHtml.length;
+    while (
+      (firstContent.getBoundingClientRect().width < targetCycleWidth || sampledSetCount < 2) &&
+      sampledSetCount < maxSetsPerCycle
+    ) {
+      const sampledSetHtml = buildNoticeSetHtml_(currentNoticeItems);
+      currentNoticeSampledSetsHtml.push(sampledSetHtml);
+      appendNoticeSet(sampledSetHtml);
+      sampledSetCount += 1;
     }
 
+    if (firstContent.getBoundingClientRect().width < targetCycleWidth) {
+      firstContent.style.minWidth = `${targetCycleWidth}px`;
+    }
+
+    const cycleWidth = Math.max(targetCycleWidth, firstContent.getBoundingClientRect().width);
+    const primarySet = firstContent.querySelector(".notice-set");
+    const primarySetLinkCount = primarySet ? primarySet.querySelectorAll("a").length : 0;
     contents[1].innerHTML = firstContent.innerHTML;
     if (firstContent.style.minWidth) {
       contents[1].style.minWidth = firstContent.style.minWidth;
     }
 
     let linkIndex = 0;
-    firstContent.querySelectorAll("a").forEach(anchor => {
+    firstContent.querySelectorAll(".notice-set a").forEach(anchor => {
       if (linkIndex >= primarySetLinkCount) anchor.tabIndex = -1;
       linkIndex += 1;
     });
