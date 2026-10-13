@@ -525,7 +525,16 @@
       els.filterToggleButton.addEventListener("click", event => {
         event.preventDefault();
         const isClosing = Boolean(els.filterDetails && els.filterDetails.classList.contains("is-closing"));
-        setFilterDetailsOpen_(isClosing || !Boolean(els.filterDetails && els.filterDetails.open));
+        const isOpen = Boolean(els.filterDetails && els.filterDetails.open && !isClosing);
+        if (isClosing || !isOpen) {
+          setFilterDetailsOpen_(true);
+          return;
+        }
+        if (!hasActiveFilterValues_() && els.resetButton) {
+          els.resetButton.click();
+          return;
+        }
+        setFilterDetailsOpen_(false);
       });
     }
     if (els.statusToggleButton) {
@@ -2744,6 +2753,13 @@
       });
     });
 
+    root.querySelectorAll(".song-title-pending-clickable").forEach(title => {
+      title.addEventListener("click", event => {
+        if (event.target.closest("button, a, input, select, textarea")) return;
+        showLikeNoticeModal("[알림]", "아직 처리되지 않은 곡입니다![img:img/PNG_Nung.png]");
+      });
+    });
+
     root.querySelectorAll("[data-unprocessed-song-title]").forEach(title => {
       if (title.dataset.unprocessedSongTitleBound === "1") return;
       title.dataset.unprocessedSongTitleBound = "1";
@@ -3325,7 +3341,7 @@
     return `
       <article class="song-card" data-id="${escapeHtml(song.id)}" style="--song-accent-hue:${accentHue};">
         <div>
-          <h3 class="song-title ${song.link ? "song-title-clickable" : ""}">${titleHtml}</h3>
+          <h3 class="song-title ${song.link ? "song-title-clickable" : "song-title-pending-clickable"}">${titleHtml}</h3>
           <div class="meta">
             ${artistBadgesHtml}
             <button class="badge badge-button" type="button" data-filter-type="date" data-filter-year="${escapeHtml(song.year)}" data-filter-month="${escapeHtml(song.month)}" data-filter-day="${escapeHtml(song.day)}" data-filter-date="${escapeHtml(formatPlainDate(song))}">${escapeHtml(dateText)}</button>

@@ -503,7 +503,8 @@ body.cooldown-status-visible .summary-cooldown {
   text-underline-offset: 3px;
 }
 
-.song-title-clickable {
+.song-title-clickable,
+.song-title-pending-clickable {
   cursor: pointer;
 }
 
