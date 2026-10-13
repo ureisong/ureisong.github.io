@@ -10069,7 +10069,7 @@
   function setupFavicon() {
     if (!els.faviconLink) return;
 
-    const candidates = ["./img/ICO_096.png", "./img/ICO_128.png", "./img/ICO_192.png"];
+    const candidates = ["./img/ICO_032.png", "./img/ICO_096.png", "./img/ICO_128.png", "./img/ICO_192.png"];
     let index = 0;
 
     const tryNext = () => {
