@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "들어줄레이🍇👻",
+  "short_name": "들어줄레이",
+  "description": "버츄얼 스트리머 유레이 의 노래방송들을 정리한 팬사이트 입니다",
+  "lang": "ko-KR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#171226",
+  "theme_color": "#171226",
+  "icons": [
+    { "src": "./img/_icon_android_home_192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./img/_icon_android_home_512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./img/_icon_android_maskable_home_512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

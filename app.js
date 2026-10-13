@@ -3559,6 +3559,7 @@
     if (!song || !String(song.link || "").trim()) return false;
 
     applyCachedPayloadForInitialSong_(payload);
+    updateShareMetaForSong_(song);
     clearInitialSongIdQuery_();
     hidePageLoading();
 
@@ -3582,13 +3583,15 @@
 
     if (!requestedId) return;
 
-    clearInitialSongIdQuery_();
-
     const song = findSongById(requestedId);
     if (!song) {
       showLikeNoticeModal("[알림]", `해당 곡을 찾을 수 없습니다.\n${requestedId}`);
+      clearInitialSongIdQuery_();
       return;
     }
+
+    updateShareMetaForSong_(song);
+    clearInitialSongIdQuery_();
 
     if (!String(song.link || "").trim()) {
       showLikeNoticeModal("[알림]", `다시보기가 없는 곡입니다.\n${getDisplayTitle(song)}`);
@@ -4041,6 +4044,20 @@
     target.textContent = value;
   }
 
+  function encodeShareIdForPath_(songId) {
+    return encodeURIComponent(String(songId || "")).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  }
+
+  function updateShareMetaForSong_(song) {
+    if (!song) return;
+    const songTitle = getDisplayTitle(song);
+    const shareTitle = `들어줄레이🍇👻 ： ${songTitle}`;
+    const ogTitle = document.querySelector('meta[property="og:title"]');
+    const twitterTitle = document.querySelector('meta[name="twitter:title"]');
+    if (ogTitle) ogTitle.setAttribute("content", shareTitle);
+    if (twitterTitle) twitterTitle.setAttribute("content", shareTitle);
+  }
+
   async function copySongShareLink_(songId) {
     const id = String(songId || "").trim();
     if (!id) {
@@ -4049,7 +4066,8 @@
     }
 
     const baseUrl = `${window.location.origin}${window.location.pathname}`;
-    const shareUrl = `${baseUrl}?id=${encodeURIComponent(id)}`;
+    const encodedId = encodeShareIdForPath_(id);
+    const shareUrl = new URL(`./share/${encodedId}.html`, baseUrl).toString();
 
     try {
       await writeTextToClipboard(shareUrl);
@@ -6870,10 +6888,10 @@
     const borderStyle = getChannelBorderStyle_(item.id);
     const hasCustomName = Boolean(item.customName);
     const primaryOfficialHtml = item.official && !hasCustomName
-      ? `<img class="channel-official-mark" src="official.png" alt="공식" loading="lazy" />`
+      ? `<img class="channel-official-mark" src="img/_icon_channel_official_badge_16.png" alt="공식" loading="lazy" />`
       : "";
     const metaHtml = hasCustomName
-      ? `<div class="channel-title-meta"><span class="channel-custom-name">${escapeHtml(item.customName)}</span>${item.official ? `<img class="channel-official-mark channel-official-mark-meta" src="official.png" alt="공식" loading="lazy" />` : ""}</div>`
+      ? `<div class="channel-title-meta"><span class="channel-custom-name">${escapeHtml(item.customName)}</span>${item.official ? `<img class="channel-official-mark channel-official-mark-meta" src="img/_icon_channel_official_badge_16.png" alt="공식" loading="lazy" />` : ""}</div>`
       : "";
     const hasDecoratedTitle = Boolean(hasCustomName || item.official);
     const titleHtml = hasDecoratedTitle
@@ -10051,7 +10069,7 @@
   function setupFavicon() {
     if (!els.faviconLink) return;
 
-    const candidates = ["./icon.ico", "./icon.png", "./icon.svg", "./icon.webp", "./icon"];
+    const candidates = ["./img/_icon_favicon_96.png?v=0", "./img/_icon_favicon_128.png?v=0", "./img/_icon_android_home_192.png?v=0"];
     let index = 0;
 
     const tryNext = () => {
