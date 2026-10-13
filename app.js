@@ -6888,10 +6888,10 @@
     const borderStyle = getChannelBorderStyle_(item.id);
     const hasCustomName = Boolean(item.customName);
     const primaryOfficialHtml = item.official && !hasCustomName
-      ? `<img class="channel-official-mark" src="img/_icon_channel_official_badge_16.png" alt="공식" loading="lazy" />`
+      ? `<img class="channel-official-mark" src="img/ICO_OFF.png" alt="공식" loading="lazy" />`
       : "";
     const metaHtml = hasCustomName
-      ? `<div class="channel-title-meta"><span class="channel-custom-name">${escapeHtml(item.customName)}</span>${item.official ? `<img class="channel-official-mark channel-official-mark-meta" src="img/_icon_channel_official_badge_16.png" alt="공식" loading="lazy" />` : ""}</div>`
+      ? `<div class="channel-title-meta"><span class="channel-custom-name">${escapeHtml(item.customName)}</span>${item.official ? `<img class="channel-official-mark channel-official-mark-meta" src="img/ICO_OFF.png" alt="공식" loading="lazy" />` : ""}</div>`
       : "";
     const hasDecoratedTitle = Boolean(hasCustomName || item.official);
     const titleHtml = hasDecoratedTitle
@@ -10069,7 +10069,7 @@
   function setupFavicon() {
     if (!els.faviconLink) return;
 
-    const candidates = ["./img/_icon_favicon_96.png?v=0", "./img/_icon_favicon_128.png?v=0", "./img/_icon_android_home_192.png?v=0"];
+    const candidates = ["./img/ICO_096.png", "./img/ICO_128.png", "./img/ICO_192.png"];
     let index = 0;
 
     const tryNext = () => {
