@@ -4581,3 +4581,39 @@ body.site-maintenance > :not(#maintenanceScreen) {
     column-gap: 5px;
   }
 }
+
+
+.notice-viewport #noticeText[hidden],
+.notice-viewport .active-filter-header-summary[hidden] {
+  display: none !important;
+}
+
+.active-filter-header-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: inherit;
+  line-height: inherit;
+  text-align: center;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.active-filter-header-summary .modal-marquee-inner {
+  flex: 0 0 auto;
+  text-align: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .active-filter-header-summary.modal-marquee-active .modal-marquee-inner {
+    animation: none;
+    transform: none;
+  }
+}

@@ -267,6 +267,7 @@
     pageLoadingSubText: document.getElementById("pageLoadingSubText"),    
     youtubeLoading: document.getElementById("youtubeLoading"),
     noticeText: document.getElementById("noticeText"),
+    activeFilterHeaderSummary: document.getElementById("activeFilterHeaderSummary"),
     footerText: document.getElementById("footerText")
   };
   
@@ -506,7 +507,10 @@
         applyFiltersAndNavigateToDate_();
       });
     }
-    els.searchInput.addEventListener("blur", () => els.searchInput.classList.remove("input-active"));
+    els.searchInput.addEventListener("blur", () => {
+      els.searchInput.classList.remove("input-active");
+      updateFilterHeaderSummary_();
+    });
     els.searchInput.addEventListener("focus", () => {
       els.searchInput.classList.add("input-active");
     });
@@ -516,6 +520,7 @@
     if (els.searchMode) els.searchMode.addEventListener("change", () => {
       applyFilterResultPanelState({ preserveSung: true });
       applyAndRender(true, { syncSungForFilters: true });
+      updateFilterHeaderSummary_();
     });
 
     if (els.filterDetails) {
@@ -559,6 +564,7 @@
         window.requestAnimationFrame(fitStatusBoxToHeader_);
       }
       scheduleNoticeMarqueeLayout_();
+      refreshFilterHeaderSummaryLayout_();
       scheduleSungGroupTitleMarquee_();
       refreshCooldownStatusLayout_();
       updateScrollSectionButtonState_();
@@ -599,11 +605,13 @@
         applyFilterResultPanelState({ preserveSung: true });
         refreshDayFilterOptions();
         applyAndRender(true, { syncSungForFilters: true });
+        updateFilterHeaderSummary_();
       });
     });
     els.dayFilter.addEventListener("change", () => {
       applyFilterResultPanelState({ preserveSung: true });
       applyAndRender(true, { syncSungForFilters: true });
+      updateFilterHeaderSummary_();
     });
 
     els.resetButton.addEventListener("click", () => {
@@ -614,6 +622,7 @@
         }
         resetFilters();
         applyAndRender(true);
+        updateFilterHeaderSummary_();
         setFilterDetailsOpen_(false);
         applyEscResultPanelState();
         scrollToRecommendSection();
@@ -621,6 +630,7 @@
       }
       resetFilters();
       applyAndRender(true);
+      updateFilterHeaderSummary_();
       collapseAllContentSectionsForFilter_();
     });
 
@@ -1026,6 +1036,7 @@
         }
         resetFilters();
         applyAndRender(true);
+        updateFilterHeaderSummary_();
         applyEscResultPanelState();
         scrollToRecommendSection();
         return;
@@ -2178,6 +2189,7 @@
     if (els.searchInput) els.searchInput.value = value;
     if (els.searchMode) els.searchMode.value = type === "artist" ? "artist" : "title";
     applyAndRender(true, { syncSungForFilters: true });
+    updateFilterHeaderSummary_();
     scrollToFilterSection();
   }
 
@@ -2899,8 +2911,6 @@
     const value = button.dataset.filterValue || "";
 
     resetFilters();
-    applyFilterResultPanelState();
-    setFilterDetailsOpen_(true);
 
     if (type === "search" || type === "artist") {
       els.searchInput.value = value;
@@ -2920,8 +2930,7 @@
       if (els.searchMode) els.searchMode.value = "date";
     }
 
-    applyAndRender(true, { syncSungForFilters: true });
-    scrollToFilterSection();
+    applyFiltersAndNavigateToDate_();
   }
 
   function collapseAllContentSectionsForFilter_() {
@@ -2951,6 +2960,76 @@
       els.categoryFilter
     ].some(select => getFilterValues(select).length > 0);
     return hasSearch || hasSelectedFilters;
+  }
+
+  function getActiveFilterHeaderSummaryText_() {
+    const segments = [];
+    const searchText = String(els.searchInput && els.searchInput.value || "").trim();
+    const searchMode = String(els.searchMode && els.searchMode.value || "all");
+    if (searchText) {
+      segments.push(searchMode === "date" ? `날짜: ${searchText}` : `검색: ${searchText}`);
+    }
+
+    const dateSearchActive = Boolean(searchText && searchMode === "date");
+    if (!dateSearchActive) {
+      const fields = [
+        [els.yearFilter, "연도"],
+        [els.monthFilter, "월"],
+        [els.dayFilter, "일"],
+        [els.countryFilter, "국가"],
+        [els.categoryFilter, "카테고리"]
+      ];
+      fields.forEach(([select, label]) => {
+        const values = getFilterValues(select);
+        if (values.length) segments.push(`${label}: ${values.join(", ")}`);
+      });
+    } else {
+      const fields = [
+        [els.countryFilter, "국가"],
+        [els.categoryFilter, "카테고리"]
+      ];
+      fields.forEach(([select, label]) => {
+        const values = getFilterValues(select);
+        if (values.length) segments.push(`${label}: ${values.join(", ")}`);
+      });
+    }
+
+    return segments.join("　·　");
+  }
+
+  function updateFilterHeaderSummary_(force = false) {
+    const summaryEl = els.activeFilterHeaderSummary;
+    const viewport = summaryEl && summaryEl.closest(".notice-viewport");
+    if (!summaryEl || !viewport) return;
+
+    const summaryText = hasActiveFilterValues_() ? getActiveFilterHeaderSummaryText_() : "";
+    if (!summaryText) {
+      viewport.classList.remove("is-filter-summary");
+      summaryEl.hidden = true;
+      summaryEl.innerHTML = "";
+      summaryEl.title = "";
+      delete summaryEl.dataset.filterSummaryText;
+      if (els.noticeText) els.noticeText.hidden = false;
+      return;
+    }
+
+    viewport.classList.add("is-filter-summary");
+    if (els.noticeText) els.noticeText.hidden = true;
+    summaryEl.hidden = false;
+    if (force || summaryEl.dataset.filterSummaryText !== summaryText || !summaryEl.querySelector(".modal-marquee-inner")) {
+      summaryEl.dataset.filterSummaryText = summaryText;
+      setModalScrollingText_(summaryEl, summaryText);
+      summaryEl.title = summaryText;
+    }
+  }
+
+  function refreshFilterHeaderSummaryLayout_() {
+    const summaryEl = els.activeFilterHeaderSummary;
+    if (!summaryEl || summaryEl.hidden) return;
+    const displayedText = String(summaryEl.dataset.filterSummaryText || "");
+    if (!displayedText) return;
+    setModalScrollingText_(summaryEl, displayedText);
+    summaryEl.title = displayedText;
   }
 
   function updateFilterToggleButtonState_() {
@@ -3165,6 +3244,7 @@
     if (!hasActiveFilterValues_()) {
       resetFilters();
       applyAndRender(true);
+      updateFilterHeaderSummary_();
       setFilterDetailsOpen_(false);
       applyEscResultPanelState();
       scrollToRecommendSection();
@@ -3173,6 +3253,7 @@
     }
 
     applyAndRender(true, { syncSungForFilters: true });
+    updateFilterHeaderSummary_();
     setFilterDetailsOpen_(false);
 
     window.setTimeout(() => {
