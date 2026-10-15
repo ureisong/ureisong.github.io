@@ -1,0 +1,108 @@
+
+name: Update song data and share pages
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - "app.js"
+      - "config.js"
+      - "index.html"
+      - "style.css"
+      - "search_aliases.js"
+      - "manifest.webmanifest"
+      - "404.html"
+      - "tools/build_data_json.py"
+      - ".github/workflows/update-data-json.yml"
+
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare build files
+        run: |
+          mkdir -p public
+
+          cp app.js config.js index.html style.css \
+             search_aliases.js manifest.webmanifest public/
+
+          cp data.json public/data.json
+
+          if [ -f 404.html ]; then
+            cp 404.html public/404.html
+          fi
+
+      - name: Check syntax
+        run: |
+          node --check app.js
+          python -m py_compile tools/build_data_json.py
+
+          if [ -f apps_script/Code.gs ]; then
+            cp apps_script/Code.gs /tmp/Code.js
+            node --check /tmp/Code.js
+          fi
+
+      - name: Build data and share pages
+        run: python tools/build_data_json.py
+
+      - name: Verify generated share pages
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from tools.build_data_json import share_page_filename
+
+          payload = json.loads(
+              Path("public/data.json").read_text(encoding="utf-8")
+          )
+          songs = payload.get("data", [])
+          share_dir = Path("public/share")
+
+          missing = [
+              str(song.get("id", "")).strip()
+              for song in songs
+              if str(song.get("id", "")).strip()
+              and not (
+                  share_dir / share_page_filename(song.get("id"))
+              ).is_file()
+          ]
+
+          if not songs or missing:
+              raise SystemExit(
+                  f"공유 페이지 생성 실패: "
+                  f"곡 {len(songs)}개, 누락 {len(missing)}개"
+              )
+
+          print(f"공유 페이지 생성 확인: {len(songs)}곡")
+          PY
+
+      - name: Copy generated files to website root
+        run: |
+          cp public/data.json data.json
+
+          mkdir -p share
+          rsync -a --delete public/share/ share/
+
+      - name: Commit generated files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update song data and share pages"
+          file_pattern: data.json share
