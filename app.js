@@ -2768,7 +2768,7 @@
     root.querySelectorAll(".song-title-pending-clickable").forEach(title => {
       title.addEventListener("click", event => {
         if (event.target.closest("button, a, input, select, textarea")) return;
-        showLikeNoticeModal("[알림]", "아직 처리되지 않은 곡입니다![img:img/PNG_Nung.png]");
+        showLikeNoticeModal("[알림]", "곡 데이터가 아직 등록되지 않았거나\n다시보기가 올라오지 않았어요!");
       });
     });
 
@@ -2778,7 +2778,7 @@
       const showPendingSongNotice = event => {
         event.preventDefault();
         event.stopPropagation();
-        showLikeNoticeModal("[알림]", "아직 처리되지 않은 곡입니다![img:img/PNG_Nung.png]");
+        showLikeNoticeModal("[알림]", "곡 데이터가 아직 등록되지 않았거나\n다시보기가 올라오지 않았어요!");
       };
       title.addEventListener("click", showPendingSongNotice);
       title.addEventListener("keydown", event => {
@@ -2962,39 +2962,79 @@
     return hasSearch || hasSelectedFilters;
   }
 
-  function getActiveFilterHeaderSummaryText_() {
-    const segments = [];
+  function getActiveFilterHeaderSummaryParts_() {
+    const parts = [];
     const searchText = String(els.searchInput && els.searchInput.value || "").trim();
     const searchMode = String(els.searchMode && els.searchMode.value || "all");
     if (searchText) {
-      segments.push(searchMode === "date" ? `날짜: ${searchText}` : `검색: ${searchText}`);
+      parts.push({ label: searchMode === "date" ? "날짜" : "검색", value: searchText, emphasis: searchMode !== "date" });
     }
 
     const dateSearchActive = Boolean(searchText && searchMode === "date");
-    if (!dateSearchActive) {
-      const fields = [
-        [els.yearFilter, "연도"],
-        [els.monthFilter, "월"],
-        [els.dayFilter, "일"],
-        [els.countryFilter, "국가"],
-        [els.categoryFilter, "카테고리"]
-      ];
-      fields.forEach(([select, label]) => {
-        const values = getFilterValues(select);
-        if (values.length) segments.push(`${label}: ${values.join(", ")}`);
-      });
-    } else {
-      const fields = [
-        [els.countryFilter, "국가"],
-        [els.categoryFilter, "카테고리"]
-      ];
-      fields.forEach(([select, label]) => {
-        const values = getFilterValues(select);
-        if (values.length) segments.push(`${label}: ${values.join(", ")}`);
-      });
-    }
+    const fields = dateSearchActive
+      ? [
+          [els.countryFilter, "국가"],
+          [els.categoryFilter, "카테고리"]
+        ]
+      : [
+          [els.yearFilter, "연도"],
+          [els.monthFilter, "월"],
+          [els.dayFilter, "일"],
+          [els.countryFilter, "국가"],
+          [els.categoryFilter, "카테고리"]
+        ];
 
-    return segments.join("　·　");
+    fields.forEach(([select, label]) => {
+      const values = getFilterValues(select);
+      if (values.length) parts.push({ label, value: values.join(", "), emphasis: false });
+    });
+    return parts;
+  }
+
+  function formatActiveFilterHeaderSummaryParts_(parts) {
+    return parts.map(part => `${part.label}：${part.value}`).join("　·　");
+  }
+
+  function getActiveFilterHeaderSummaryText_() {
+    return formatActiveFilterHeaderSummaryParts_(getActiveFilterHeaderSummaryParts_());
+  }
+
+  function setFilterHeaderSummaryScrollingText_(el, parts, text) {
+    if (!el) return;
+
+    const value = String(text || "");
+    el.dataset.copyText = value;
+    el.title = value;
+    el.innerHTML = "";
+    el.classList.remove("modal-marquee-active");
+    el.style.removeProperty("--modal-marquee-distance");
+    el.style.removeProperty("--modal-marquee-duration");
+
+    const inner = document.createElement("span");
+    inner.className = "modal-marquee-inner";
+    parts.forEach((part, index) => {
+      if (index > 0) inner.appendChild(document.createTextNode("　·　"));
+      inner.appendChild(document.createTextNode(`${part.label}：`));
+      if (part.emphasis) {
+        const strong = document.createElement("strong");
+        strong.textContent = part.value;
+        inner.appendChild(strong);
+      } else {
+        inner.appendChild(document.createTextNode(part.value));
+      }
+    });
+    el.appendChild(inner);
+
+    window.requestAnimationFrame(() => {
+      if (!el.isConnected || el.hidden || el.dataset.filterSummaryText !== value) return;
+      const distance = Math.ceil(inner.scrollWidth - el.clientWidth);
+      if (distance <= 2) return;
+      const moveSeconds = Math.max(2.4, Math.min(12, distance / 38));
+      const totalSeconds = 4 + moveSeconds * 2;
+      el.style.setProperty("--modal-marquee-distance", `${distance}px`);
+      el.style.setProperty("--modal-marquee-duration", `${totalSeconds}s`);
+      el.classList.add("modal-marquee-active");
+    });
   }
 
   function updateFilterHeaderSummary_(force = false) {
@@ -3002,13 +3042,15 @@
     const viewport = summaryEl && summaryEl.closest(".notice-viewport");
     if (!summaryEl || !viewport) return;
 
-    const summaryText = hasActiveFilterValues_() ? getActiveFilterHeaderSummaryText_() : "";
+    const summaryParts = hasActiveFilterValues_() ? getActiveFilterHeaderSummaryParts_() : [];
+    const summaryText = formatActiveFilterHeaderSummaryParts_(summaryParts);
     if (!summaryText) {
       viewport.classList.remove("is-filter-summary");
       summaryEl.hidden = true;
       summaryEl.innerHTML = "";
       summaryEl.title = "";
       delete summaryEl.dataset.filterSummaryText;
+      delete summaryEl.dataset.filterSummaryParts;
       if (els.noticeText) els.noticeText.hidden = false;
       return;
     }
@@ -3018,7 +3060,8 @@
     summaryEl.hidden = false;
     if (force || summaryEl.dataset.filterSummaryText !== summaryText || !summaryEl.querySelector(".modal-marquee-inner")) {
       summaryEl.dataset.filterSummaryText = summaryText;
-      setModalScrollingText_(summaryEl, summaryText);
+      summaryEl.dataset.filterSummaryParts = JSON.stringify(summaryParts);
+      setFilterHeaderSummaryScrollingText_(summaryEl, summaryParts, summaryText);
       summaryEl.title = summaryText;
     }
   }
@@ -3028,7 +3071,11 @@
     if (!summaryEl || summaryEl.hidden) return;
     const displayedText = String(summaryEl.dataset.filterSummaryText || "");
     if (!displayedText) return;
-    setModalScrollingText_(summaryEl, displayedText);
+    let displayedParts = [];
+    try {
+      displayedParts = JSON.parse(summaryEl.dataset.filterSummaryParts || "[]");
+    } catch {}
+    setFilterHeaderSummaryScrollingText_(summaryEl, displayedParts, displayedText);
     summaryEl.title = displayedText;
   }
 
@@ -3904,11 +3951,8 @@
     setExternalModalPanelsHidden_(false);
 
     if (els.modalLikePanel) {
-      els.modalLikePanel.innerHTML = isPlaylistMode
-        ? `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}</div>`
-        : `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}${renderPlaylistAddButton(song, { modal: true })}</div>`;
+      els.modalLikePanel.innerHTML = `<div class="like-panel modal-like-controls">${renderLikeControls(song, isLocallyLiked(song.id), false)}</div>`;
       bindLikeButtons(els.modalLikePanel);
-      if (!isPlaylistMode) bindPlaylistAddButtons(els.modalLikePanel);
     }
 
     if (els.modalFooterLikePanel) {
@@ -3917,9 +3961,30 @@
     }
 
     if (els.modalFooterPlaylistPanel) {
-      els.modalFooterPlaylistPanel.innerHTML = isPlaylistMode ? "" : renderPlaylistAddButton(song, { modal: true });
+      els.modalFooterPlaylistPanel.innerHTML = isPlaylistMode
+        ? ""
+        : `${renderModalShareButton_(song.id)}${renderPlaylistAddButton(song, { modal: true })}`;
+      bindModalShareButtons_(els.modalFooterPlaylistPanel);
       bindPlaylistAddButtons(els.modalFooterPlaylistPanel);
     }
+  }
+
+  function renderModalShareButton_(songId) {
+    const id = String(songId || "").trim();
+    if (!id) return "";
+    return `<button class="playlist-add-button modal-share-button" type="button" data-modal-share-id="${escapeHtml(id)}" title="공유링크 복사" aria-label="공유링크 복사"></button>`;
+  }
+
+  function bindModalShareButtons_(root) {
+    if (!root) return;
+    root.querySelectorAll("[data-modal-share-id]").forEach(button => {
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        addLikeClickFeedback(button);
+        void copySongShareLink_(button.dataset.modalShareId || "");
+      });
+    });
   }
 
   function appendModalScrollingTextContent_(inner, value, options = {}) {
@@ -4097,31 +4162,6 @@
     const value = String(text || "");
     const target = els.modalSongFooterText || els.modalSongFooter;
     if (!target) return;
-
-    target.textContent = "";
-
-    if (els.modalSongFooterText && value.includes("／") && currentModalSongId) {
-      const parts = value.split("／");
-      parts.forEach((part, index) => {
-        if (index > 0) {
-          const shareButton = document.createElement("button");
-          shareButton.type = "button";
-          shareButton.className = "modal-share-separator";
-          shareButton.title = "공유링크 복사";
-          shareButton.textContent = "／";
-          shareButton.addEventListener("click", event => {
-            event.preventDefault();
-            event.stopPropagation();
-            copySongShareLink_(currentModalSongId);
-          });
-          target.appendChild(shareButton);
-        }
-
-        target.appendChild(document.createTextNode(part));
-      });
-      return;
-    }
-
     target.textContent = value;
   }
 
