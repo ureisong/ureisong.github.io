@@ -466,7 +466,7 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
     esc_page_url = html.escape(page_url, quote=True)
     esc_image_url = html.escape(image_url, quote=True)
     return f'''<!doctype html>
-<html lang="ko">
+<html lang="ko" class="dark-mode">
 <head>
   <!-- {SHARE_PAGE_MARKER} -->
   <meta charset="utf-8" />
@@ -474,6 +474,11 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
   <title>{html.escape(og_title)}</title>
   <meta name="description" content="{esc_description}" />
   <meta name="theme-color" content="#171226" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" media="print" onload="this.media='all'" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css" media="print" onload="this.media='all'" />
+  <link rel="stylesheet" href="../style.css" />
   <link rel="canonical" href="{esc_page_url}" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="{html.escape(SITE_TITLE, quote=True)}" />
@@ -490,8 +495,16 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
   <meta name="twitter:description" content="{esc_description}" />
   <meta name="twitter:image" content="{esc_image_url}" />
 </head>
-<body>
-  <p>곡 정보를 불러오는 중입니다. 자동으로 이동하지 않으면 <a href="{encoded_redirect}">여기를 눌러 이동</a>하세요.</p>
+<body class="page-loading-open">
+  <div id="pageLoading" class="page-loading" role="status" aria-live="polite">
+    <div class="page-loading-card">
+      <div class="loader-box use-default-loader">
+        <div class="default-spinner" aria-hidden="true"></div>
+        <div class="loader-text">...LOADING...</div>
+        <div class="loader-subtext">요청한 곡을 불러오고 있어요...<br><a href="{encoded_redirect}">자동으로 이동하지 않으면 여기를 눌러 이동하세요.</a></div>
+      </div>
+    </div>
+  </div>
   <script>window.location.replace({redirect_js});</script>
 </body>
 </html>

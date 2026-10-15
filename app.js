@@ -400,6 +400,9 @@
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
+    const initialSongId = getInitialSongIdQuery_();
+    showPageLoading("...LOADING...", initialSongId ? "요청한 곡을 불러오고 있어요..." : "노래 목록을 불러오고 있어요...");
+
     if (!isLocalDevelopmentHost_()) {
       const startupSettingsRows = await loadSettingsRows(true);
       currentSettingsRows = startupSettingsRows;
@@ -409,11 +412,9 @@
       }
     }
 
-    const initialSongId = getInitialSongIdQuery_();
     const initialCachedPayload = initialSongId ? readLocalJsonCache() : null;
     const canTryInitialCache = Boolean(initialSongId && initialCachedPayload);
 
-    if (!canTryInitialCache) showPageLoading("...LOADING...", "초기화면 준비 중.");
     bindEvents();
     loadPlaylists();
     applyPlaylistEnabledState(false);
@@ -424,12 +425,13 @@
     const openedInitialFromCache = canTryInitialCache ? tryOpenInitialSongFromLocalCache_(initialSongId, initialCachedPayload) : false;
     suppressPageLoadingForInitialShare = openedInitialFromCache;
 
-    if (!openedInitialFromCache) showPageLoading("...LOADING...", "공지사항 읽는 중..");
+    if (!openedInitialFromCache && initialSongId) {
+      showPageLoading("...LOADING...", "요청한 곡을 불러오고 있어요...");
+    }
     renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
     renderFooter();
     setupCounterTracking();
     loadVisitorCount();
-    showPageLoading("...LOADING...", "필터 만드는 중...");
     updateFilterSummaryHelp();
     startCooldownTimer();
     startCoverAutoTimer();
@@ -457,6 +459,7 @@
   }
 
   function renderMaintenanceScreen_() {
+    hidePageLoading();
     document.documentElement.classList.add("site-maintenance");
     document.body.classList.add("site-maintenance");
 
@@ -1224,7 +1227,12 @@
     const cachedSongsAtStart = cachedAtStart && (Array.isArray(cachedAtStart.data) ? cachedAtStart.data : Array.isArray(cachedAtStart) ? cachedAtStart : []);
     const hasUsableLocalCache = Array.isArray(cachedSongsAtStart) && cachedSongsAtStart.length > 0;
     if (!hasUsableLocalCache) {
-      showPageLoading("...LOADING...", forceNetwork ? "노래들을 새로 불러오고 있어요!" : "노래들을 불러오고 있어요!");
+      showPageLoading(
+        "...LOADING...",
+        getInitialSongIdQuery_()
+          ? "요청한 곡을 불러오고 있어요..."
+          : (forceNetwork ? "최신 노래 목록을 확인하고 있어요..." : "노래 목록을 불러오고 있어요...")
+      );
     }
     setStatus(hasUsableLocalCache ? "저장된 데이터 표시 중…" : "데이터 로딩 중...");
 
@@ -1256,7 +1264,6 @@
           buildFilters(allSongs, songbookSongs);
           applyAndRender(true);
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
-          hidePageLoading();
         }
       }
 

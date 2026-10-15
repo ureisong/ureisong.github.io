@@ -44,7 +44,7 @@
 
   <link rel="stylesheet" href="./style.css" />
 </head>
-<body>
+<body class="page-loading-open">
   <header class="site-header">
     <div class="header-main">
       <button id="scrollSectionButton" class="header-tool-toggle scroll-section-toggle" type="button" aria-label="아래로 스크롤" title="아래로 스크롤"></button>
@@ -393,12 +393,12 @@
     </div>
   </div>
 
-  <div id="pageLoading" class="page-loading" hidden>
+  <div id="pageLoading" class="page-loading" role="status" aria-live="polite">
     <div class="page-loading-card">
       <div class="loader-box use-default-loader">
         <div class="default-spinner" aria-hidden="true"></div>
-        <div id="pageLoadingText" class="loader-text">데이터를 불러오는 중...</div>
-        <div id="pageLoadingSubText" class="loader-subtext"></div>
+        <div id="pageLoadingText" class="loader-text">...LOADING...</div>
+        <div id="pageLoadingSubText" class="loader-subtext">노래 목록을 불러오고 있어요...</div>
       </div>
     </div>
   </div>
