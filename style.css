@@ -1443,9 +1443,11 @@ html.dark-mode .page-loading-card {
 
 .page-loading .loader-text {
   animation: LoadingBreath 2.69s ease-in-out infinite;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .loader-subtext {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   margin-top: 8px;
   font-size: clamp(13px, 2.2vw, 17px);
   color: var(--muted);
@@ -4505,12 +4507,57 @@ body.site-maintenance > :not(#maintenanceScreen) {
 }
 
 .maintenance-screen-text {
+  position: relative;
+  isolation: isolate;
   margin: 0;
   font-family: var(--font-display);
   font-size: clamp(3rem, 10vw, 7rem);
   font-weight: 900;
   line-height: 1.1;
   letter-spacing: 0.04em;
+}
+
+.maintenance-screen-text::before,
+.maintenance-screen-text::after {
+  position: absolute;
+  inset: 0;
+  content: attr(data-text);
+  pointer-events: none;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.maintenance-screen-text::before {
+  color: #8ccfff;
+  text-shadow: -2px 0 rgba(140, 207, 255, 0.58);
+  animation: maintenanceGlitchA 5.8s steps(1, end) infinite;
+}
+
+.maintenance-screen-text::after {
+  color: #ff8bae;
+  text-shadow: 2px 0 rgba(255, 139, 174, 0.58);
+  animation: maintenanceGlitchB 5.8s steps(1, end) infinite;
+}
+
+@keyframes maintenanceGlitchA {
+  0%, 90%, 100% { opacity: 0; transform: translate3d(0, 0, 0); clip-path: inset(0 0 100% 0); }
+  91% { opacity: 0.78; transform: translate3d(-3px, 0, 0); clip-path: inset(14% 0 66% 0); }
+  91.5% { opacity: 0; transform: translate3d(0, 0, 0); }
+  92.2% { opacity: 0.68; transform: translate3d(2px, -1px, 0); clip-path: inset(57% 0 24% 0); }
+  92.7% { opacity: 0; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes maintenanceGlitchB {
+  0%, 90.8%, 100% { opacity: 0; transform: translate3d(0, 0, 0); clip-path: inset(0 0 100% 0); }
+  91.3% { opacity: 0.72; transform: translate3d(3px, 1px, 0); clip-path: inset(42% 0 39% 0); }
+  91.8% { opacity: 0; transform: translate3d(0, 0, 0); }
+  92.5% { opacity: 0.65; transform: translate3d(-2px, 0, 0); clip-path: inset(78% 0 8% 0); }
+  93% { opacity: 0; transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maintenance-screen-text::before,
+  .maintenance-screen-text::after { animation: none !important; }
 }
 
 

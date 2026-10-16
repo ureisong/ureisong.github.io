@@ -27,7 +27,7 @@
   const SONGBOOK_CSV_URL = CONFIG.SONGBOOK_CSV_URL || "";
   const NOTICE_SPEED_PX_PER_SECOND = Math.max(1, Number(CONFIG.NOTICE_SPEED_PX_PER_SECOND || 30));
   const CSV_CACHE_PREFIX = "csv_cache_";
-  const SONGS_CSV_CACHE_NAME = "songs_title_artist";
+  const SONGS_CSV_CACHE_NAME = "songs_csv_cache";
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
   const SETTINGS_VERSION_SONGS = "version_songs";
   const SETTINGS_VERSION_SEARCH_ALIASES = "version_search_aliases";
@@ -47,7 +47,7 @@
   const YOUTUBE_SLOW_SECOND_MESSAGE_MS = 2000;
   const YOUTUBE_NO_RESPONSE_CLOSE_MS = 10000;
   const YOUTUBE_NO_RESPONSE_NOTICE_MS = 3000;
-  const YOUTUBE_SHARE_AUTOPLAY_WAIT_MS = 2600;
+  const YOUTUBE_SHARE_AUTOPLAY_WAIT_MS = 10000;
   const TAB_TITLE_MARQUEE_INITIAL_HOLD_MS = 3000;
   const TAB_TITLE_MARQUEE_STEP_MS = 250;
   const TAB_TITLE_MARQUEE_END_HOLD_MS = 2200;
@@ -395,6 +395,7 @@
   let normalPlaybackSegment = { start: 0, end: null, hasStart: false, hasEnd: false, hasSegment: false, endPauseHandled: false };
   let normalPlaybackCloseFadePending = false;
   let suppressPageLoadingForInitialShare = false;
+  let pendingPageLoadingHide = false;
   let playlistImportPreviewState = null;
 
   document.addEventListener("DOMContentLoaded", init);
@@ -471,6 +472,7 @@
     const message = document.createElement("div");
     message.className = "maintenance-screen-text";
     message.textContent = "점검중";
+    message.setAttribute("data-text", "점검중");
     screen.appendChild(message);
     document.body.appendChild(screen);
   }
@@ -1562,8 +1564,9 @@
     const rows = parseCsvRows(source);
     if (!rows.length) return [];
     const getRawCell = row => row.length > 6 ? row[6] : row.length === 1 ? row[0] : "";
+    const isFullSheetCsv = rows.some(row => row.length > 1);
     const firstValue = String(getRawCell(rows[0]) || "").trim();
-    const startIndex = firstValue.includes("／") ? 0 : 1;
+    const startIndex = isFullSheetCsv ? 4 : (firstValue.includes("／") ? 0 : 1);
     const result = [];
     const seen = new Set();
 
@@ -4494,7 +4497,10 @@
     ensureYouTubeIframeApi_()
       .then(() => {
         if (!isCurrentYoutubeToken_(token)) return;
-        createYoutubePlayer_(videoId, startSeconds, token, 0, { suppressInitialLoading: youtubeInitialLoadingSuppressed });
+        createYoutubePlayer_(videoId, startSeconds, token, 0, {
+          suppressInitialLoading: youtubeInitialLoadingSuppressed,
+          shareAutoplay: modalOptions.shareAutoplayWait === true
+        });
       })
       .catch(err => {
         if (!isCurrentYoutubeToken_(token)) return;
@@ -4609,7 +4615,7 @@
     }
 
     const playerVars = {
-      autoplay: 1,
+      autoplay: options && options.shareAutoplay === true ? 0 : 1,
       playsinline: 1,
       rel: 0,
       vq: "hd1080",
@@ -4632,6 +4638,9 @@
         onReady: event => {
           if (!isCurrentYoutubeToken_(token)) return;
           try {
+            if (options && options.shareAutoplay === true && event.target && typeof event.target.mute === "function") {
+              event.target.mute();
+            }
             if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
               playlistPlayback.baseVolume = getPlaylistPreferredVolume_();
               playlistPlayback.volumeMode = "starting";
@@ -4656,6 +4665,19 @@
           }
         },
         onStateChange: event => handleYoutubePlayerStateChange_(event, youtubePlayerToken),
+        onAutoplayBlocked: () => {
+          if (!isCurrentYoutubeToken_(token) || !(options && options.shareAutoplay === true) || youtubeStartedPlaying) return;
+          clearYoutubeShareAutoplayWaitTimer_();
+          youtubeAwaitingManualPlayback = true;
+          clearYoutubeLoadingStatusTimer_();
+          clearYoutubeBufferingTimer_();
+          showYoutubeLoadingMessage("브라우저가 자동 재생을 차단했어요. 재생 버튼을 눌러주세요.");
+          youtubeShareAutoplayWaitTimer = window.setTimeout(() => {
+            if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
+            hideYoutubeLoading(false, 0);
+            youtubeShareAutoplayWaitTimer = null;
+          }, 2200);
+        },
         onError: event => handleYoutubePlayerError_(event, youtubePlayerToken)
       }
     });
@@ -10098,6 +10120,25 @@
 
   function hidePageLoading() {
     if (!els.pageLoading) return;
+    if (!document.documentElement.classList.contains("main-css-ready")) {
+      const stylesheet = document.getElementById("mainStylesheet");
+      if (stylesheet) {
+        pendingPageLoadingHide = true;
+        if (stylesheet.dataset.loadingGateBound !== "true") {
+          stylesheet.dataset.loadingGateBound = "true";
+          const finishStylesheetWait = () => {
+            document.documentElement.classList.add("main-css-ready");
+            if (!pendingPageLoadingHide) return;
+            pendingPageLoadingHide = false;
+            hidePageLoading();
+          };
+          stylesheet.addEventListener("load", finishStylesheetWait, { once: true });
+          stylesheet.addEventListener("error", finishStylesheetWait, { once: true });
+        }
+        return;
+      }
+    }
+    pendingPageLoadingHide = false;
     els.pageLoading.hidden = true;
     document.body.classList.remove("page-loading-open");
   }

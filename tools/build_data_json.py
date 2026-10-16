@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Google Sheets 공개 CSV를 검증하고 public/data.json을 원자적으로 생성합니다.
-
-환경변수는 선택적으로 지정할 수 있으며, 지정하지 않으면 public/config.js의 URL을 사용합니다.
-필수: SONGS_CSV_URL, LIKES_SMR_CSV_URL
-선택: NOTICE_CSV_URL, SETTINGS_CSV_URL, SEARCH_ALIASES_CSV_URL, SONGBOOK_CSV_URL
-"""
 from __future__ import annotations
 
 import csv
@@ -31,9 +25,7 @@ SITE_DESCRIPTION = "버츄얼 스트리머 유레이 의 노래방송들을 정�
 KST = timezone(timedelta(hours=9))
 USER_AGENT = "songs-data-json-builder/2.0"
 
-
 def get_config_url(name: str) -> str:
-    """환경변수를 우선하고, 없으면 정적 config.js에서 URL을 읽습니다."""
     env_value = str(os.environ.get(name, "") or "").strip()
     if env_value:
         return env_value
@@ -43,7 +35,6 @@ def get_config_url(name: str) -> str:
         return ""
     match = re.search(r"(?m)^\s*" + re.escape(name) + r"\s*:\s*([\"'])(.*?)\1\s*,?\s*$", source)
     return str(match.group(2) if match else "").strip()
-
 
 def parse_csv_text(text: str, source_name: str, required_headers: Sequence[str] = ()) -> List[Dict[str, str]]:
     cleaned = str(text or "").lstrip("\ufeff\r\n\t ")
@@ -69,7 +60,6 @@ def parse_csv_text(text: str, source_name: str, required_headers: Sequence[str] 
             rows.append(normalized)
     return rows
 
-
 def read_csv_from_url(url: str, source_name: str, required_headers: Sequence[str] = ()) -> List[Dict[str, str]]:
     url = str(url or "").strip()
     if not url:
@@ -80,7 +70,6 @@ def read_csv_from_url(url: str, source_name: str, required_headers: Sequence[str
 
     text = download_csv_text(url, source_name)
     return parse_csv_text(text, source_name, required_headers)
-
 
 def download_csv_text(url: str, source_name: str) -> str:
     url = str(url or "").strip()
@@ -102,23 +91,15 @@ def download_csv_text(url: str, source_name: str) -> str:
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"{source_name}: UTF-8 인코딩이 아닙니다.") from exc
 
-
-
 def _clean_songbook_cell(value: Any) -> str:
     text = str(value or "").strip()
     if text in {"", '""', "''"}:
         return ""
-    # Sheets에 문자열 그대로 기록된 연속 따옴표/공백도 빈 값으로 처리합니다.
     if re.fullmatch(r"[\"']{2,}", text):
         return ""
     return text
 
-
 def parse_songbook_column_g(csv_text: str) -> List[Dict[str, str]]:
-    """songbook 시트의 G열 원시 문자열을 제목/아티스트/국가/분류로 나눕니다.
-
-    기본 입력은 헤더가 있는 전체 시트 CSV입니다. G열만 별도로 내보낸 1열 CSV도 지원합니다.
-    """
     cleaned = str(csv_text or "").lstrip("\ufeff\r\n\t ")
     if not cleaned:
         return []
@@ -132,9 +113,12 @@ def parse_songbook_column_g(csv_text: str) -> List[Dict[str, str]]:
     if not rows:
         return []
 
-    # 통상 첫 행은 시트 헤더입니다. 첫 셀에 구분자 데이터가 있으면 헤더 없는 CSV로 간주합니다.
-    first_row_value = rows[0][6] if len(rows[0]) > 6 else rows[0][0] if len(rows[0]) == 1 else ""
-    start_index = 0 if "／" in _clean_songbook_cell(first_row_value) else 1
+    is_full_sheet_csv = any(len(row) > 1 for row in rows)
+    if is_full_sheet_csv:
+        start_index = 4
+    else:
+        first_row_value = rows[0][0] if rows[0] else ""
+        start_index = 0 if "／" in _clean_songbook_cell(first_row_value) else 1
     result: List[Dict[str, str]] = []
     seen_raw = set()
     for row_number, row in enumerate(rows[start_index:], start=start_index + 1):
@@ -166,11 +150,9 @@ def parse_songbook_column_g(csv_text: str) -> List[Dict[str, str]]:
         })
     return result
 
-
 def _normalized_identity_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or "")).casefold()
     return re.sub(r"\s+", "", text).strip()
-
 
 def _song_title_key(value: Any) -> str:
     text = str(value or "").split("ㅨ", 1)[0]
@@ -178,14 +160,11 @@ def _song_title_key(value: Any) -> str:
     text = text.replace(" [불법레이]", "").replace(" 🍥", "")
     return _normalized_identity_text(text)
 
-
 def _split_multi_identity(value: Any) -> List[str]:
     parts = [part.strip() for part in str(value or "").split(" & ") if part.strip()]
     return parts or ([str(value).strip()] if str(value or "").strip() else [""])
 
-
 def filter_unique_songbook_rows(songbook_rows: List[Dict[str, str]], songs: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """방송 기록 곡에 제목/아티스트가 이미 존재하면 노래책 항목을 제외합니다."""
     known_pairs = set()
     known_titles = set()
     for song in songs:
@@ -230,7 +209,6 @@ def to_int(value: Any) -> int:
     except (TypeError, ValueError, OverflowError):
         return 0
 
-
 def timeline_to_seconds(value: Any) -> int:
     text = str(value or "").strip()
     if not text:
@@ -262,14 +240,12 @@ def timeline_to_seconds(value: Any) -> int:
     except (TypeError, ValueError, OverflowError):
         return 0
 
-
 def normalize_end_value(timeline: Any, end: Any) -> str:
     start_text = str(timeline or "").strip()
     end_text = str(end or "").strip()
     if not start_text or not end_text:
         return end_text
     return end_text if timeline_to_seconds(end_text) > timeline_to_seconds(start_text) else ""
-
 
 def validate_song_rows(rows: List[Dict[str, str]]) -> None:
     if not rows:
@@ -285,7 +261,6 @@ def validate_song_rows(rows: List[Dict[str, str]]) -> None:
     if not any(str(row.get("title", "")).strip() for row in rows):
         raise RuntimeError("곡 CSV의 title 값이 전부 비어 있습니다.")
 
-
 def parse_aliases_cell(value: Any) -> List[str]:
     text = str(value or "").strip()
     if not text:
@@ -295,7 +270,6 @@ def parse_aliases_cell(value: Any) -> List[str]:
     except (csv.Error, StopIteration):
         values = text.split(",")
     return list(dict.fromkeys(part.strip().strip('"').strip() for part in values if part.strip().strip('"').strip()))
-
 
 def build_search_aliases(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
     aliases: Dict[str, Dict[str, Any]] = {}
@@ -309,7 +283,6 @@ def build_search_aliases(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]
         }
     return aliases
 
-
 def first_notice_value(rows: List[Dict[str, str]], key_name: str) -> str:
     target = key_name.strip().lower()
     for row in rows:
@@ -317,14 +290,12 @@ def first_notice_value(rows: List[Dict[str, str]], key_name: str) -> str:
             return str(row.get("value", "")).strip()
     return ""
 
-
 def first_notice_row(rows: List[Dict[str, str]], key_name: str) -> Dict[str, str] | None:
     target = key_name.strip().lower()
     for row in rows:
         if str(row.get("key", "")).strip().lower() == target and str(row.get("value", "")).strip():
             return row
     return None
-
 
 def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], notice_rows: List[Dict[str, str]], settings_rows: List[Dict[str, str]], alias_rows: List[Dict[str, str]], songbook_rows: List[Dict[str, str]] | None = None) -> Dict[str, Any]:
     validate_song_rows(songs)
@@ -396,12 +367,10 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
         "searchAliases": build_search_aliases(alias_rows),
     }
 
-
 def atomic_write_json(payload: Dict[str, Any]) -> None:
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp_path = OUT_PATH.with_name(OUT_PATH.name + ".tmp")
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    # 쓰기 후 다시 파싱해 결과를 검증하고, 검증된 경우에만 기존 파일을 교체합니다.
     temp_path.write_text(serialized, encoding="utf-8")
     with temp_path.open("r", encoding="utf-8") as file:
         verified = json.load(file)
@@ -410,9 +379,7 @@ def atomic_write_json(payload: Dict[str, Any]) -> None:
         raise RuntimeError("생성된 JSON 검증에 실패했습니다. 기존 data.json을 보존합니다.")
     temp_path.replace(OUT_PATH)
 
-
 def get_site_base_url() -> str:
-    """index.html canonical URL에서 사이트 기본 주소를 읽습니다."""
     try:
         text = (ROOT / "public" / "index.html").read_text(encoding="utf-8")
     except OSError:
@@ -424,14 +391,10 @@ def get_site_base_url() -> str:
         return "https://ureisong.github.io/"
     return candidate if candidate.endswith("/") else candidate.rsplit("/", 1)[0] + "/"
 
-
 def share_page_filename(song_id: Any) -> str:
-    """브라우저 encodeURIComponent와 일치하는 URL-safe 정적 공유 페이지 파일명입니다."""
     return quote(str(song_id or "").strip(), safe="-_.~") + ".html"
 
-
 def format_share_display_title(value: Any) -> str:
-    """app.js의 화면용 제목 치환을 정적 공유 메타데이터에도 적용합니다."""
     parts = [part.strip() for part in str(value or "").split(" & ") if part.strip()]
     if not parts:
         return "곡명 없음"
@@ -444,9 +407,7 @@ def format_share_display_title(value: Any) -> str:
             output.append(shown)
     return " ".join(output) or "곡명 없음"
 
-
 def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = None) -> str:
-    """봇이 JavaScript를 실행하지 않아도 곡별 Open Graph 제목을 읽을 수 있는 정적 페이지를 생성합니다."""
     song_id = str(song.get("id", "")).strip()
     if not song_id:
         raise ValueError("공유 페이지에는 곡 id가 필요합니다.")
@@ -460,7 +421,6 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
     og_title = f"{SITE_TITLE} ： {display_title}"
     redirect_target = "../?" + urlencode({"id": song_id})
     redirect_js = json.dumps(redirect_target, ensure_ascii=False).replace("</", "<\\/")
-    encoded_redirect = html.escape(redirect_target, quote=True)
     esc_title = html.escape(og_title, quote=True)
     esc_description = html.escape(SITE_DESCRIPTION, quote=True)
     esc_page_url = html.escape(page_url, quote=True)
@@ -468,7 +428,7 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
     return f'''<!doctype html>
 <html lang="ko" class="dark-mode">
 <head>
-  <!-- {SHARE_PAGE_MARKER} -->
+  <meta name="generator" content="{SHARE_PAGE_MARKER}" />
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{html.escape(og_title)}</title>
@@ -478,7 +438,23 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&display=swap" media="print" onload="this.media='all'" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css" media="print" onload="this.media='all'" />
-  <link rel="stylesheet" href="../style.css" />
+  <style>
+    html.dark-mode, body {{ margin: 0; min-height: 100%; background: #100d19; color: #f4f0fb; }}
+    body.page-loading-open {{ overflow: hidden; }}
+    .page-loading {{ position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(8, 5, 16, .62); backdrop-filter: blur(8px); }}
+    .page-loading-card {{ box-sizing: border-box; width: min(380px, calc(100vw - 40px)); min-height: 188px; padding: clamp(24px, 4vw, 34px); display: grid; place-items: center; background: #1d1732; color: #f4f0fb; border: 1px solid rgba(205, 187, 236, .24); border-radius: 24px; box-shadow: 0 26px 90px rgba(0, 0, 0, .3); }}
+    .loader-box {{ position: relative; display: grid; justify-items: center; gap: 14px; color: inherit; font-weight: 700; }}
+    .default-spinner {{ display: none; width: 52px; height: 52px; border-radius: 999px; border: 4px solid #2b2440; border-top-color: #b09aff; animation: spin .8s linear infinite; }}
+    .use-default-loader .default-spinner {{ display: block; }}
+    .loader-text {{ font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: clamp(22px, 4.2vw, 32px); text-align: center; line-height: 1.25; font-weight: 700; letter-spacing: .01em; background: linear-gradient(120deg, #b09aff, #ff8bae 85%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: LoadingBreath 2.69s ease-in-out infinite; }}
+    .loader-subtext {{ margin-top: 8px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: clamp(13px, 2.2vw, 17px); color: #aaa0bd; opacity: .92; text-align: center; line-height: 1.45; font-weight: 600; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    @keyframes LoadingBreath {{ 0%, 100% {{ opacity: .72; transform: scale(.985); }} 50% {{ opacity: 1; transform: scale(1); }} }}
+    @media (max-width: 560px) {{ .page-loading-card {{ width: min(340px, calc(100vw - 34px)); min-height: 164px; }} .page-loading .default-spinner {{ width: 40px; height: 40px; border-width: 3px; }} .page-loading .loader-text {{ font-size: clamp(22px, 7.4vw, 30px); }} .page-loading .loader-subtext {{ font-size: clamp(12px, 3.7vw, 15px); }} }}
+    @media (prefers-reduced-motion: reduce) {{ .loader-text, .default-spinner {{ animation: none !important; }} }}
+  </style>
+  <link id="shareStylesheet" rel="preload" href="../style.css" as="style" onload="this.onload=null;this.rel='stylesheet';document.documentElement.classList.add('share-css-ready')" onerror="document.documentElement.classList.add('share-css-ready')" />
+  <noscript><link rel="stylesheet" href="../style.css" /></noscript>
   <link rel="canonical" href="{esc_page_url}" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="{html.escape(SITE_TITLE, quote=True)}" />
@@ -501,18 +477,28 @@ def render_song_share_page(song: Dict[str, Any], *, site_base_url: str | None = 
       <div class="loader-box use-default-loader">
         <div class="default-spinner" aria-hidden="true"></div>
         <div class="loader-text">...LOADING...</div>
-        <div class="loader-subtext">요청한 곡을 불러오고 있어요...<br><a href="{encoded_redirect}">자동으로 이동하지 않으면 여기를 눌러 이동하세요.</a></div>
+        <div class="loader-subtext">요청한 곡을 불러오고 있어요...</div>
       </div>
     </div>
   </div>
-  <script>window.location.replace({redirect_js});</script>
+  <script>
+    (() => {{
+      const redirect = () => window.location.replace({redirect_js});
+      const stylesheet = document.getElementById("shareStylesheet");
+      const redirectAfterPaint = () => window.setTimeout(redirect, 50);
+      if (document.documentElement.classList.contains("share-css-ready")) {{
+        requestAnimationFrame(redirectAfterPaint);
+      }} else {{
+        stylesheet.addEventListener("load", () => requestAnimationFrame(redirectAfterPaint), {{ once: true }});
+        stylesheet.addEventListener("error", () => requestAnimationFrame(redirectAfterPaint), {{ once: true }});
+      }}
+    }})();
+  </script>
 </body>
 </html>
 '''
 
-
 def write_song_share_pages(songs: List[Dict[str, Any]], output_dir: Path | None = None, *, site_base_url: str | None = None) -> int:
-    """곡 ID별 OG 페이지를 생성하고 이전 생성 파일을 정리합니다."""
     destination = output_dir or SHARE_PAGES_DIR
     destination.mkdir(parents=True, exist_ok=True)
     expected: set[str] = set()
@@ -544,7 +530,6 @@ def write_song_share_pages(songs: List[Dict[str, Any]], output_dir: Path | None 
     for temp in destination.glob("*.html.tmp"):
         temp.unlink(missing_ok=True)
     return generated
-
 
 def main() -> int:
     songs_url = get_config_url("SONGS_CSV_URL")
@@ -579,7 +564,6 @@ def main() -> int:
     print(f"Wrote {OUT_PATH} ({len(payload['data'])} songs, {len(payload['songbook'])} songbook-only songs, {size_kb:.1f} KiB)")
     print(f"Generated {share_pages_count} song share pages in {SHARE_PAGES_DIR}")
     return 0
-
 
 if __name__ == "__main__":
     try:
