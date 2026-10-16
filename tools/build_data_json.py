@@ -164,12 +164,28 @@ def _split_multi_identity(value: Any) -> List[str]:
     parts = [part.strip() for part in str(value or "").split(" & ") if part.strip()]
     return parts or ([str(value).strip()] if str(value or "").strip() else [""])
 
+def _artist_identity_values(value: Any) -> List[str]:
+    values: List[str] = []
+    for part in _split_multi_identity(value):
+        match = re.fullmatch(r"(.*?)\s*\(ㅨ(.*?)\)\s*", part)
+        if match and match.group(1).strip() and match.group(2).strip():
+            character_name = match.group(1).strip()
+            vocalist_name = match.group(2).strip()
+            candidates = [character_name, vocalist_name, f"{character_name} ({vocalist_name})"]
+        else:
+            candidates = [part]
+        for candidate in candidates:
+            normalized = _normalized_identity_text(candidate)
+            if normalized and normalized not in values:
+                values.append(normalized)
+    return values
+
 def filter_unique_songbook_rows(songbook_rows: List[Dict[str, str]], songs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     known_pairs = set()
     known_titles = set()
     for song in songs:
         titles = [_song_title_key(value) for value in _split_multi_identity(song.get("title", ""))]
-        artists = [_normalized_identity_text(value) for value in _split_multi_identity(song.get("artist", ""))]
+        artists = _artist_identity_values(song.get("artist", ""))
         titles = [value for value in titles if value]
         for title in titles:
             known_titles.add(title)
@@ -183,15 +199,16 @@ def filter_unique_songbook_rows(songbook_rows: List[Dict[str, str]], songs: List
         artist = str(item.get("artist", "")).strip()
         title_key = _song_title_key(title)
         artist_key = _normalized_identity_text(artist)
+        artist_keys = _artist_identity_values(artist)
         if not title_key:
             continue
         identity = (title_key, artist_key)
         if identity in seen_pairs:
             continue
         seen_pairs.add(identity)
-        if artist_key and identity in known_pairs:
+        if artist_keys and any((title_key, key) in known_pairs for key in artist_keys):
             continue
-        if not artist_key and title_key in known_titles:
+        if not artist_keys and title_key in known_titles:
             continue
         result.append({
             "title": title,

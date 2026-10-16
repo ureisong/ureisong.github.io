@@ -48,7 +48,7 @@
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
   const PAGE_LOADING_MESSAGES = [
     "노래 목록을 불러오고 있어요…",
-    "추가된 노래들이 있는지 확인하고 있어요…",
+    "추가된 노래들이 있는지 확인중이에요!",
     "새로운 노래가 있을까나… [img:img/GIF_Popcat.gif]",
     "잠시만요… [img:img/PNG_Nung.png]\n빠뜨린 건 없는지 살펴보고 있어요！",
     "모든 [img:img/PNG_Nung.png] 노래를 수집중입니다…"
@@ -2369,7 +2369,7 @@
     const lines = [`[${dateText}]`];
 
     items.forEach(song => {
-      const artist = String(song.artist || "").trim() || getDisplayArtist(song);
+      const artist = getRawDisplayArtist(song);
       const title = String(song.title || "").trim() || getDisplayTitle(song);
       const timeline = hasAnyTimeline ? formatTimelineForCopy(song.timeline) : "";
       const prefix = timeline ? `${timeline} ` : "";
@@ -2865,7 +2865,7 @@
 
     [...songs].sort(compareDateDesc).forEach(song => {
       const titleText = getSungGroupTitleText_(song);
-      const artistValues = getArtistValues(song);
+      const artistValues = getArtistDisplayValues_(song);
 
       if (mode === "artist") {
         artistValues.forEach(artist => {
@@ -2940,14 +2940,14 @@
 
   function isSongbookDuplicateInSongs_(songbookItem, songs) {
     const bookTitles = getTitleValues(songbookItem).map(getCanonicalSungTitleText_).map(normalizeSearchText).filter(Boolean);
-    const bookArtists = getArtistValues(songbookItem).map(normalizeSearchText).filter(Boolean);
+    const bookArtists = getArtistSearchValues_(songbookItem).map(normalizeSearchText).filter(Boolean);
     if (!bookTitles.length) return false;
 
     return (songs || []).some(song => {
       const songTitles = getTitleValues(song).map(getCanonicalSungTitleText_).map(normalizeSearchText).filter(Boolean);
       if (!songTitles.some(title => bookTitles.includes(title))) return false;
       if (!bookArtists.length) return true;
-      const songArtists = getArtistValues(song).map(normalizeSearchText).filter(Boolean);
+      const songArtists = getArtistSearchValues_(song).map(normalizeSearchText).filter(Boolean);
       return bookArtists.some(artist => songArtists.includes(artist));
     });
   }
@@ -2962,6 +2962,63 @@
       .filter(Boolean);
 
     return values.length ? [...new Set(values)] : [];
+  }
+
+  function parseSpecialArtistDisplayRule_(value) {
+    const text = String(value || "").trim();
+    const match = text.match(/^(.*?)\s*\(ㅨ([\s\S]*?)\)\s*$/u);
+    if (!match) return null;
+
+    const characterName = String(match[1] || "").trim();
+    const vocalistName = String(match[2] || "").trim();
+    if (!characterName || !vocalistName) return null;
+
+    return {
+      characterName,
+      vocalistName,
+      display: `${characterName} (${vocalistName})`
+    };
+  }
+
+  function formatArtistValueForDisplay_(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const special = parseSpecialArtistDisplayRule_(text);
+    if (special) return special.display;
+    return text.replaceAll("ㅨ", "").replace(/\s{2,}/g, " ").trim();
+  }
+
+  function formatArtistTextForDisplay_(value, separator = " & ") {
+    const values = splitMultiValue(value);
+    if (!values.length) return formatArtistValueForDisplay_(value);
+    return values.map(formatArtistValueForDisplay_).filter(Boolean).join(separator);
+  }
+
+  function getArtistDisplayValues_(song) {
+    return getArtistValues(song).map(formatArtistValueForDisplay_).filter(Boolean);
+  }
+
+  function getArtistSearchValuesForValue_(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return [];
+    const special = parseSpecialArtistDisplayRule_(raw);
+    const values = special
+      ? [special.characterName, special.vocalistName, special.display, raw]
+      : [raw, formatArtistValueForDisplay_(raw)];
+    return [...new Set(values.map(item => String(item || "").trim()).filter(Boolean))];
+  }
+
+  function getArtistSearchValues_(song) {
+    return getArtistValues(song).flatMap(getArtistSearchValuesForValue_);
+  }
+
+  function getArtistBadgeDescriptors_(song) {
+    return getArtistValues(song).map(value => {
+      const special = parseSpecialArtistDisplayRule_(value);
+      const label = special ? special.vocalistName : formatArtistValueForDisplay_(value);
+      const filterValue = special ? special.vocalistName : formatArtistValueForDisplay_(value);
+      return { label, filterValue };
+    }).filter(item => item.label && item.label !== "-");
   }
 
   function formatDisplaySongTitleText_(value) {
@@ -3061,13 +3118,23 @@
   }
 
   function getDisplayArtist(song) {
-    const values = getArtistValues(song);
+    const values = getArtistDisplayValues_(song);
     return values.length ? values.join(" ") : "아티스트 없음";
   }
 
   function getRawDisplayArtist(song) {
-    const value = String(song && song.artist || "").trim();
+    const value = formatArtistTextForDisplay_(song && song.artist || "");
     return value || getDisplayArtist(song);
+  }
+
+  function renderArtistBadges(song, extraClass = "artist", fallback = "아티스트 정보 없음") {
+    const descriptors = getArtistBadgeDescriptors_(song);
+    const source = descriptors.length ? descriptors : (fallback ? [{ label: fallback, filterValue: fallback }] : []);
+    const className = ["badge", "badge-button", extraClass].filter(Boolean).join(" ");
+
+    return source.map(item => `
+      <button class="${escapeHtml(className)}" type="button" data-filter-type="artist" data-filter-value="${escapeHtml(item.filterValue)}">${escapeHtml(item.label)}</button>
+    `).join("");
   }
   
   function formatPopupMultiText(value) {
@@ -3794,7 +3861,7 @@
     const titleText = getDisplayTitle(song);
     const searchableTitleText = getSearchableDisplayTitle_(song);
     const artistText = getDisplayArtist(song);
-    const modalArtistText = String(song.artist || "").trim() || artistText;
+    const modalArtistText = artistText;
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
@@ -3816,7 +3883,7 @@
       : "";
 
     const subLinksHtml = renderSubLinks(song);
-    const artistBadgesHtml = renderMultiValueBadges(getArtistValues(song), "artist", "artist", "아티스트 정보 없음");
+    const artistBadgesHtml = renderArtistBadges(song, "artist", "아티스트 정보 없음");
     const categoryBadgesHtml = renderMultiValueBadges(getCategoryValues(song), "category", "", "미분류");
     const countryBadgesHtml = renderMultiValueBadges(getCountryValues(song), "country", "", "미분류");
 
@@ -4053,7 +4120,7 @@
     window.setTimeout(() => {
       openYoutubeModal(youtubeUrl, {
         title: getDisplayTitle(song),
-        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        artist: getRawDisplayArtist(song),
         date: formatSongDate(song),
         timeline: song.timeline || "",
         end: song.end || "",
@@ -4088,7 +4155,7 @@
     window.setTimeout(() => {
       openYoutubeModal(youtubeUrl, {
         title: getDisplayTitle(song),
-        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        artist: getRawDisplayArtist(song),
         date: formatSongDate(song),
         timeline: song.timeline || "",
         end: song.end || "",
@@ -4439,7 +4506,7 @@
   }
 
   function setModalArtistText_(text) {
-    currentModalArtistText = String(text || "").trim();
+    currentModalArtistText = formatArtistTextForDisplay_(text);
     setModalScrollingText_(els.modalSongArtist, currentModalArtistText, { artistParts: true });
     refreshPlayingTabTitle_();
   }
@@ -5682,7 +5749,7 @@
   function getSearchFieldValues(song, mode) {
     const searchableTitleValues = getSearchableTitleValues_(song);
     const titleValues = [...searchableTitleValues.map(formatDisplaySongTitleText_), ...searchableTitleValues];
-    const artistValues = [getDisplayArtist(song), ...getArtistValues(song)];
+    const artistValues = [...new Set([getDisplayArtist(song), ...getArtistSearchValues_(song)])];
     const dateValues = [formatPlainDate(song), formatSongDate(song), `${song.year}-${song.month}-${song.day}`];
     const idValues = [song && song.id];
 
@@ -8365,7 +8432,7 @@
         key: getPlaylistItemKey_(item),
         song,
         title: getDisplayTitle(song),
-        artist: String(song.artist || "").trim() || getDisplayArtist(song),
+        artist: getRawDisplayArtist(song),
         section: "",
         url: song.link,
         videoId: extractYoutubeVideoId(song.link),
