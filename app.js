@@ -299,6 +299,7 @@
   let recommendMode = "random";
   let recommendVisibleCount = RECOMMEND_LIMITS.random;
   let randomPoolIds = [];
+  let randomRecommendExcludedKeys = new Set();
   let randomRecommendGeneration = 0;
   let randomRecommendMixSignature = "";
   let randomRecommendMixIds = [];
@@ -741,7 +742,10 @@
       button.addEventListener("click", () => {
         recommendMode = button.dataset.recommendMode;
         recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
-        if (recommendMode === "random") resetRandomRecommendPool_(filteredSongs);
+        if (recommendMode === "random") {
+          randomRecommendExcludedKeys = new Set();
+          resetRandomRecommendPool_(filteredSongs);
+        }
 
         document.querySelectorAll("[data-recommend-mode]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
@@ -751,6 +755,8 @@
 
     els.recommendMoreButton.addEventListener("click", () => {
       if (recommendMode === "random") {
+        const currentlyShownItems = getRandomRecommendMixItems_(filteredSongs);
+        randomRecommendExcludedKeys = new Set(currentlyShownItems.map(normalizeSongArtistKey).filter(Boolean));
         resetRandomRecommendPool_(filteredSongs);
       } else {
         recommendVisibleCount += RECOMMEND_MORE_STEP;
@@ -2054,13 +2060,19 @@
 
 
   function resetRandomRecommendPool_(songs = filteredSongs) {
-    randomPoolIds = makeRandomUniqueLinkedPoolIds(songs);
+    const excludedKeys = randomRecommendExcludedKeys || new Set();
+    const eligibleSongs = (songs || []).filter(song => {
+      const key = normalizeSongArtistKey(song);
+      return key && !excludedKeys.has(key);
+    });
+    randomPoolIds = makeRandomUniqueLinkedPoolIds(eligibleSongs);
     randomRecommendGeneration += 1;
     randomRecommendMixSignature = "";
     randomRecommendMixIds = [];
   }
 
   function clearRandomRecommendPool_() {
+    randomRecommendExcludedKeys = new Set();
     randomPoolIds = [];
     randomRecommendGeneration += 1;
     randomRecommendMixSignature = "";
@@ -2078,11 +2090,14 @@
       const targetCount = Math.min(getRandomRecommendLimit(), baseItems.length);
       const picked = [];
       const usedKeys = new Set();
+      const usedIds = new Set();
+      const excludedKeys = randomRecommendExcludedKeys || new Set();
 
       for (const song of baseItems.slice(0, Math.max(0, targetCount - 1))) {
         const key = normalizeSongArtistKey(song);
-        if (!key || usedKeys.has(key)) continue;
+        if (!key || excludedKeys.has(key) || usedKeys.has(key) || usedIds.has(song.id)) continue;
         usedKeys.add(key);
+        usedIds.add(song.id);
         picked.push(song);
       }
 
@@ -2091,22 +2106,30 @@
         const useCorrectedRecommendation = Math.random() * 100 < currentRandomRecommendProbability;
         if (useCorrectedRecommendation) {
           const correctedCandidates = getRandomUniqueLinkedCandidates(
-            (songs || []).filter(song => isRandomRecommendCandidate(song) && toNumber(song.likes_total) > 0)
+            (songs || []).filter(song => {
+              const key = normalizeSongArtistKey(song);
+              return isRandomRecommendCandidate(song) && toNumber(song.likes_total) > 0 &&
+                key && !excludedKeys.has(key);
+            })
           );
           extraSong = correctedCandidates.find(song => {
             const key = normalizeSongArtistKey(song);
-            return key && !usedKeys.has(key);
+            return key && !usedKeys.has(key) && !usedIds.has(song.id);
           }) || null;
         }
 
         if (!extraSong) {
           extraSong = baseItems.find(song => {
             const key = normalizeSongArtistKey(song);
-            return key && !usedKeys.has(key);
+            return key && !excludedKeys.has(key) && !usedKeys.has(key) && !usedIds.has(song.id);
           }) || null;
         }
 
-        if (extraSong) picked.push(extraSong);
+        if (extraSong) {
+          picked.push(extraSong);
+          usedKeys.add(normalizeSongArtistKey(extraSong));
+          usedIds.add(extraSong.id);
+        }
       }
 
       randomRecommendMixIds = shuffleArray(picked).map(song => song.id);
@@ -4746,6 +4769,7 @@
     els.youtubeFrameWrap.classList.toggle("playlist-side-nav-enabled", sideNavEnabled);
     els.youtubeFrameWrap.innerHTML = `
       <div id="youtubePlayerMount" class="youtube-player-mount"></div>
+      <div class="youtube-share-muted-shield" aria-hidden="true"></div>
       <button class="youtube-side-nav youtube-side-prev" type="button" aria-label="이전곡"></button>
       <button class="youtube-side-nav youtube-side-next" type="button" aria-label="다음곡"></button>
       <button class="youtube-side-time youtube-side-time-current" type="button" aria-label="10초 전으로 이동" title="10초 전으로 이동">00:00</button>
@@ -5092,6 +5116,8 @@
   function showYoutubeShareMutedNotice_() {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
     if (!notice || !youtubeShareAutoplayActive || youtubeShareMutedNoticeDismissed) return;
+    const shield = els.youtubeFrameWrap.querySelector(".youtube-share-muted-shield");
+    if (shield) shield.classList.add("is-active");
     notice.hidden = false;
     notice.classList.remove("is-visible");
     void notice.offsetWidth;
@@ -5100,10 +5126,12 @@
 
   function hideYoutubeShareMutedNotice_() {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    const shield = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-shield");
     if (notice) {
       notice.classList.remove("is-visible");
       notice.hidden = true;
     }
+    if (shield && !youtubeShareMutedConsumedPointerClick) shield.classList.remove("is-active");
   }
 
   function dismissYoutubeShareMutedNotice_(restoreAudio = false) {
@@ -5182,6 +5210,10 @@
       window.clearTimeout(youtubeShareMutedConsumedPointerClickTimer);
       youtubeShareMutedConsumedPointerClickTimer = null;
     }
+    if (!isYoutubeShareMutedNoticeActive_()) {
+      const shield = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-shield");
+      if (shield) shield.classList.remove("is-active");
+    }
   }
 
   function consumeYoutubeShareMutedGesture_(event) {
@@ -5206,7 +5238,10 @@
   }
 
   function captureYoutubeShareMutedNoticePointerUp_(event) {
-    if (youtubeShareMutedConsumedPointerClick) consumeYoutubeShareMutedGesture_(event);
+    if (!youtubeShareMutedConsumedPointerClick) return;
+    consumeYoutubeShareMutedGesture_(event);
+    if (youtubeShareMutedConsumedPointerClickTimer) window.clearTimeout(youtubeShareMutedConsumedPointerClickTimer);
+    youtubeShareMutedConsumedPointerClickTimer = window.setTimeout(clearYoutubeShareMutedConsumedClick_, 0);
   }
 
   function captureYoutubeShareMutedNoticeClick_(event) {

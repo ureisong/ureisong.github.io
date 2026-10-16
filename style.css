@@ -1169,6 +1169,17 @@ html.dark-mode .like-button.liking {
   display: block;
 }
 
+.youtube-share-muted-shield {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: transparent;
+  pointer-events: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.youtube-share-muted-shield.is-active { pointer-events: auto; }
+
 .youtube-share-muted-notice {
   position: absolute;
   z-index: 6;
