@@ -50,7 +50,7 @@
     "노래 목록을 불러오고 있어요…",
     "추가된 노래들이 있는지 확인하고 있어요…",
     "새로운 노래가 있을까나… [img:img/GIF_Popcat.gif]",
-    "잠시만요… [img:img/PNG_Nung.png]\n놓친 노래들이 있는지 확인하고 있어요！",
+    "잠시만요… [img:img/PNG_Nung.png]\n빠뜨린 건 없는지 살펴보고 있어요！",
     "모든 [img:img/PNG_Nung.png] 노래를 수집중입니다…"
   ];
   const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
@@ -357,6 +357,8 @@
   let youtubeStartedPlaying = false;
   let youtubeShareAutoplayActive = false;
   let youtubeShareMutedNoticeDismissed = false;
+  let youtubeShareMutedConsumedPointerClick = false;
+  let youtubeShareMutedConsumedPointerClickTimer = null;
   let youtubeInitialLoadingSuppressed = false;
   let youtubeAwaitingManualPlayback = false;
   let currentYoutubeLoadingText = "";
@@ -563,7 +565,9 @@
   }
 
   function bindEvents() {
-    document.addEventListener("pointerdown", dismissYoutubeShareMutedNoticeOutside_, true);
+    document.addEventListener("pointerdown", captureYoutubeShareMutedNoticePointerDown_, true);
+    document.addEventListener("pointerup", captureYoutubeShareMutedNoticePointerUp_, true);
+    document.addEventListener("click", captureYoutubeShareMutedNoticeClick_, true);
     els.searchInput.addEventListener("input", () => {
       applyFilterResultPanelState({ preserveSung: true });
       if (searchRenderTimer) window.clearTimeout(searchRenderTimer);
@@ -1037,10 +1041,6 @@
     }
 
     els.youtubeModal.addEventListener("click", event => {
-      if (event.target === els.youtubeModal && isYoutubeShareMutedNoticeActive_()) {
-        event.preventDefault();
-        return;
-      }
       if (playlistPlayback && playlistPlayback.finished) {
         closeYoutubeModal();
         return;
@@ -4528,9 +4528,9 @@
       layers[nextIndex].classList.add("is-active");
       layers[nextIndex].removeAttribute("aria-hidden");
       activeIndex = nextIndex;
-      modalFooterMessageTimer = window.setTimeout(cycleMessage, 5000);
+      modalFooterMessageTimer = window.setTimeout(cycleMessage, 8000);
     };
-    modalFooterMessageTimer = window.setTimeout(cycleMessage, 5000);
+    modalFooterMessageTimer = window.setTimeout(cycleMessage, 8000);
   }
 
   function clearModalFooterMessageRotation_() {
@@ -4750,7 +4750,6 @@
       <button class="youtube-side-nav youtube-side-next" type="button" aria-label="다음곡"></button>
       <button class="youtube-side-time youtube-side-time-current" type="button" aria-label="10초 전으로 이동" title="10초 전으로 이동">00:00</button>
       <button class="youtube-side-time youtube-side-time-remaining" type="button" aria-label="10초 후로 이동" title="10초 후로 이동">-00:00</button>
-      <div class="youtube-share-muted-dismiss-layer" hidden aria-hidden="true"></div>
       <div class="youtube-share-muted-notice" role="button" tabindex="0" aria-label="음소거 안내 닫기" aria-live="polite" hidden>현재 음소거 상태로 자동 재생 중입니다.</div>
     `;
     const prev = els.youtubeFrameWrap.querySelector(".youtube-side-prev");
@@ -4758,14 +4757,6 @@
     const currentTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
     const remainingTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
     const shareMutedNotice = els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
-    const shareMutedDismissLayer = els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
-    if (shareMutedDismissLayer) {
-      shareMutedDismissLayer.addEventListener("pointerdown", event => {
-        event.preventDefault();
-        event.stopPropagation();
-        dismissYoutubeShareMutedNotice_(true);
-      });
-    }
     if (shareMutedNotice) {
       shareMutedNotice.addEventListener("click", event => {
         event.preventDefault();
@@ -5100,34 +5091,24 @@
 
   function showYoutubeShareMutedNotice_() {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
-    const dismissLayer = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
     if (!notice || !youtubeShareAutoplayActive || youtubeShareMutedNoticeDismissed) return;
-    if (dismissLayer) dismissLayer.hidden = false;
     notice.hidden = false;
     notice.classList.remove("is-visible");
     void notice.offsetWidth;
     notice.classList.add("is-visible");
   }
 
-  function hideYoutubeShareMutedNotice_(keepPlayerInteractionCapture = false) {
+  function hideYoutubeShareMutedNotice_() {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
-    const dismissLayer = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
     if (notice) {
       notice.classList.remove("is-visible");
       notice.hidden = true;
-    }
-    if (dismissLayer) {
-      const canCapturePlayerInteraction = keepPlayerInteractionCapture && youtubeShareAutoplayActive &&
-        normalPlaybackFadeState && normalPlaybackFadeState.phase === "share-muted";
-      dismissLayer.hidden = !canCapturePlayerInteraction;
     }
   }
 
   function dismissYoutubeShareMutedNotice_(restoreAudio = false) {
     youtubeShareMutedNoticeDismissed = true;
-    const keepPlayerInteractionCapture = !restoreAudio && youtubeShareAutoplayActive &&
-      normalPlaybackFadeState && normalPlaybackFadeState.phase === "share-muted";
-    hideYoutubeShareMutedNotice_(Boolean(keepPlayerInteractionCapture));
+    hideYoutubeShareMutedNotice_();
     if (restoreAudio) restoreYoutubeShareMutedAudio_();
   }
 
@@ -5195,11 +5176,48 @@
       normalPlaybackFadeState.phase === "share-muted");
   }
 
-  function dismissYoutubeShareMutedNoticeOutside_(event) {
-    const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
-    if (!notice || notice.hidden || notice.contains(event.target)) return;
-    if (event.target === els.youtubeModal && isYoutubeShareMutedNoticeActive_()) return;
-    dismissYoutubeShareMutedNotice_();
+  function clearYoutubeShareMutedConsumedClick_() {
+    youtubeShareMutedConsumedPointerClick = false;
+    if (youtubeShareMutedConsumedPointerClickTimer) {
+      window.clearTimeout(youtubeShareMutedConsumedPointerClickTimer);
+      youtubeShareMutedConsumedPointerClickTimer = null;
+    }
+  }
+
+  function consumeYoutubeShareMutedGesture_(event) {
+    if (!event) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+  }
+
+  function captureYoutubeShareMutedNoticePointerDown_(event) {
+    if (!isYoutubeShareMutedNoticeActive_()) {
+      if (youtubeShareMutedConsumedPointerClick) clearYoutubeShareMutedConsumedClick_();
+      return;
+    }
+    if (event.isPrimary === false || (typeof event.button === "number" && event.button !== 0)) return;
+
+    consumeYoutubeShareMutedGesture_(event);
+    youtubeShareMutedConsumedPointerClick = true;
+    if (youtubeShareMutedConsumedPointerClickTimer) window.clearTimeout(youtubeShareMutedConsumedPointerClickTimer);
+    youtubeShareMutedConsumedPointerClickTimer = window.setTimeout(clearYoutubeShareMutedConsumedClick_, 800);
+    dismissYoutubeShareMutedNotice_(true);
+  }
+
+  function captureYoutubeShareMutedNoticePointerUp_(event) {
+    if (youtubeShareMutedConsumedPointerClick) consumeYoutubeShareMutedGesture_(event);
+  }
+
+  function captureYoutubeShareMutedNoticeClick_(event) {
+    if (youtubeShareMutedConsumedPointerClick) {
+      consumeYoutubeShareMutedGesture_(event);
+      clearYoutubeShareMutedConsumedClick_();
+      return;
+    }
+    if (!isYoutubeShareMutedNoticeActive_()) return;
+    consumeYoutubeShareMutedGesture_(event);
+    dismissYoutubeShareMutedNotice_(true);
   }
 
   function loadYoutubeMediaIntoExistingPlayer_(videoId, startSeconds, token, options = {}) {

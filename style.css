@@ -1169,16 +1169,6 @@ html.dark-mode .like-button.liking {
   display: block;
 }
 
-.youtube-share-muted-dismiss-layer {
-  position: absolute;
-  z-index: 5;
-  inset: 0;
-  background: transparent;
-  cursor: default;
-  touch-action: manipulation;
-}
-.youtube-share-muted-dismiss-layer[hidden] { display: none !important; }
-
 .youtube-share-muted-notice {
   position: absolute;
   z-index: 6;
