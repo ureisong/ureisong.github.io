@@ -1211,7 +1211,7 @@ html.dark-mode .like-button.liking {
   content: "";
   position: absolute;
   top: -7px;
-  right: 24px;
+  right: calc(50% - 6px);
   width: 12px;
   height: 12px;
   border-right: 1px solid rgba(220, 205, 255, 0.34);

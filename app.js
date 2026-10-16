@@ -35,6 +35,7 @@
   let searchAliases = {};
   let currentSettingsRows = [];
   let settingsRowsPromise = null;
+  let startupDataJsonPromise = null;
   let activeSongsVersion = "";
   let activeSearchAliasesVersion = "";
   let searchAliasesLoadedFromData = false;
@@ -408,10 +409,24 @@
     const initialSongId = getInitialSongIdQuery_();
     showPageLoading("...LOADING...", initialSongId ? "요청한 곡을 불러오고 있어요..." : "노래 목록을 불러오고 있어요...");
 
+    let startupCacheWarmPromise = null;
+    let startupCachedPayload = null;
     if (!isLocalDevelopmentHost_()) {
-      const startupSettingsRows = await loadSettingsRows(true);
+      const startupSettingsPromise = loadSettingsRows(true);
+      startupCachedPayload = readLocalJsonCache();
+      const startupCachedSongs = startupCachedPayload && (Array.isArray(startupCachedPayload.data)
+        ? startupCachedPayload.data
+        : Array.isArray(startupCachedPayload) ? startupCachedPayload : []);
+      if (Array.isArray(startupCachedSongs) && startupCachedSongs.length > 0) {
+        startupCacheWarmPromise = loadData(false, null, { keepPageLoading: true, deferSearchAliases: true, deferStartupRender: true });
+      } else {
+        startDataJsonPrefetch_();
+      }
+
+      const startupSettingsRows = await startupSettingsPromise;
       currentSettingsRows = startupSettingsRows;
       if (shouldShowMaintenanceScreenForEntry_(startupSettingsRows, initialSongId)) {
+        if (startupCacheWarmPromise) await startupCacheWarmPromise;
         renderMaintenanceScreen_();
         return;
       }
@@ -433,8 +448,6 @@
     if (!openedInitialFromCache && initialSongId) {
       showPageLoading("...LOADING...", "요청한 곡을 불러오고 있어요...");
     }
-    renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
-    renderFooter();
     setupCounterTracking();
     loadVisitorCount();
     updateFilterSummaryHelp();
@@ -443,16 +456,43 @@
     startRecAutoTimer();
     startChannelAutoTimer();
     bindResponsiveRender();
-    await loadData(false, null);
+
+    let startupDataLoadedFromWarmCache = false;
+    if (startupCacheWarmPromise) {
+      await startupCacheWarmPromise;
+      if (isPayloadSongsVersionCurrentForSettings_(startupCachedPayload, currentSettingsRows)) {
+        startupDataLoadedFromWarmCache = true;
+        const requiredAliasesVersion = getSettingValue(currentSettingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
+        const cachedAliasesObject = startupCachedPayload.searchAliases && typeof startupCachedPayload.searchAliases === "object"
+          ? startupCachedPayload.searchAliases
+          : null;
+        const cachedAliasesVersion = getPayloadSearchAliasesVersion_(startupCachedPayload);
+        const cachedAliasesAreCurrent = !SEARCH_ALIASES_CSV_URL || !requiredAliasesVersion ||
+          Boolean(cachedAliasesObject && cachedAliasesVersion &&
+            compareVersionText(cachedAliasesVersion, requiredAliasesVersion) >= 0);
+        if (!cachedAliasesAreCurrent) searchAliasesLoadedFromData = false;
+      }
+    }
+
+    if (!startupDataLoadedFromWarmCache) {
+      renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
+      renderFooter();
+      await loadData(false, currentSettingsRows);
+    } else {
+      renderStartupCachedPayload_(startupCachedPayload);
+    }
     if (!searchAliasesLoadedFromData) {
       const rows = currentSettingsRows.length ? currentSettingsRows : await loadSettingsRows();
       currentSettingsRows = rows;
       await loadSearchAliases(false, rows);
+      buildFilters(allSongs, songbookSongs);
+      applyAndRender(true);
     }
+    if (startupDataLoadedFromWarmCache) hidePageLoading();
     suppressPageLoadingForInitialShare = false;
     if (!openedInitialFromCache) handleInitialSongIdQuery_();
   }
-  
+
   function isLocalDevelopmentHost_() {
     const hostname = String(window.location && window.location.hostname || "").trim().toLowerCase();
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]" || hostname.endsWith(".localhost");
@@ -1295,7 +1335,7 @@
     writeLocalJsonCache(cached);
   }
 
-  async function loadData(forceNetwork = false, settingsRows = null) {
+  async function loadData(forceNetwork = false, settingsRows = null, options = {}) {
     const cachedAtStart = !forceNetwork ? readLocalJsonCache() : null;
     const cachedSongsAtStart = cachedAtStart && (Array.isArray(cachedAtStart.data) ? cachedAtStart.data : Array.isArray(cachedAtStart) ? cachedAtStart : []);
     const effectiveSettingsForCache = Array.isArray(settingsRows) && settingsRows.length ? settingsRows : currentSettingsRows;
@@ -1309,7 +1349,9 @@
           : (forceNetwork ? "최신 노래 목록을 확인하고 있어요..." : "노래 목록을 불러오고 있어요...")
       );
     }
-    setStatus(hasUsableLocalCache ? "저장된 데이터 표시 중…" : "데이터 로딩 중...");
+    if (!(options && options.deferStartupRender)) {
+      setStatus(hasUsableLocalCache ? "저장된 데이터 표시 중…" : "데이터 로딩 중...");
+    }
 
     try {
       if (!forceNetwork) {
@@ -1333,28 +1375,22 @@
           }
           currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
-          applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
           coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(cached.covers || []), coverItems);
           recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
           channelItems = normalizeChannelItems(cached.channels || []);
-          hydrateStoredCoverPlaylistEntries_();
-          void resolvePendingStoredCoverPlaylistEntries_();
           likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
           playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
-          applyPlaylistEnabledState(playlistEnabled);
-          renderNotice(currentNoticeItems);
-          renderFooter();
-          renderCoverSection();
-          renderRecSection();
-          renderChannelSection();
-          buildFilters(allSongs, songbookSongs);
-          applyAndRender(true);
-          if (!searchAliasesLoadedFromData) {
+          if (!(options && options.deferStartupRender)) {
+            renderStartupCachedPayload_(cached);
+          }
+          if (!searchAliasesLoadedFromData && !(options && options.deferSearchAliases)) {
             await loadSearchAliases(false, effectiveSettingsForCache);
             buildFilters(allSongs, songbookSongs);
             applyAndRender(true);
           }
-          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+          if (!(options && options.deferStartupRender)) {
+            setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+          }
           return;
         }
       }
@@ -1446,8 +1482,34 @@
         if (els.sungList) els.sungList.innerHTML = `<div class="empty error-box">데이터를 읽지 못해 표시할 수 없습니다.</div>`;
       }
     } finally {
-      hidePageLoading();
+      if (!(options && options.keepPageLoading)) hidePageLoading();
     }
+  }
+
+  function renderStartupCachedPayload_(cached) {
+    if (!cached) return;
+    applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
+    hydrateStoredCoverPlaylistEntries_();
+    void resolvePendingStoredCoverPlaylistEntries_();
+    applyPlaylistEnabledState(playlistEnabled);
+    renderNotice(currentNoticeItems);
+    renderFooter();
+    renderCoverSection();
+    renderRecSection();
+    renderChannelSection();
+    buildFilters(allSongs, songbookSongs);
+    applyAndRender(true);
+    setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+  }
+
+  function startDataJsonPrefetch_() {
+    if (!DATA_URL || startupDataJsonPromise) return;
+    startupDataJsonPromise = (async () => {
+      const response = await fetch(DATA_URL, { cache: "default" });
+      if (!response.ok) throw new Error(`data.json 응답 오류: ${response.status}`);
+      return response.json();
+    })();
+    startupDataJsonPromise.catch(() => {});
   }
 
   async function fetchSongsPayload(forceNetwork, settingsRows = null) {
@@ -1455,9 +1517,19 @@
 
     if (DATA_URL) {
       try {
-        const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "default" });
-        if (!res.ok) throw new Error(`data.json 응답 오류: ${res.status}`);
-        const json = await res.json();
+        let json;
+        if (!forceNetwork && startupDataJsonPromise) {
+          const pendingJson = startupDataJsonPromise;
+          try {
+            json = await pendingJson;
+          } finally {
+            if (startupDataJsonPromise === pendingJson) startupDataJsonPromise = null;
+          }
+        } else {
+          const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "default" });
+          if (!res.ok) throw new Error(`data.json 응답 오류: ${res.status}`);
+          json = await res.json();
+        }
         const data = Array.isArray(json) ? json : json && json.data;
         if (!Array.isArray(data) || data.length === 0) {
           throw new Error("data.json에 사용할 수 있는 곡 데이터가 없습니다.");
@@ -4783,7 +4855,13 @@
                 if (Number.isFinite(observedVolume)) targetVolume = Math.max(0, Math.min(100, observedVolume));
               } catch {}
               event.target.mute();
-              normalPlaybackFadeState = { token, targetVolume, phase: "share-muted", endFadeStarted: false };
+              normalPlaybackFadeState = {
+                token,
+                targetVolume,
+                phase: "share-muted",
+                shareAudioRestored: false,
+                endFadeStarted: false
+              };
             } else if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
               playlistPlayback.baseVolume = getPlaylistPreferredVolume_();
               playlistPlayback.volumeMode = "starting";
@@ -4865,6 +4943,7 @@
         state.token !== youtubePlayerToken || !youtubeIsPlaying) return;
 
     const targetVolume = Math.max(0, Math.min(100, Number(state.targetVolume) || 0));
+    state.shareAudioRestored = true;
     hideYoutubeShareMutedNotice_();
     if (targetVolume <= 0) {
       state.phase = "normal";
@@ -4880,6 +4959,39 @@
       normalPlaybackFadeState.endFadeStarted = false;
       startNormalPlaybackMonitor_(state.token);
     }, { muteUntilAudible: true });
+    startNormalPlaybackMonitor_(state.token);
+  }
+
+  function resumeYoutubeShareAudioAfterPause_(state) {
+    if (!state || !youtubePlayer || state.token !== youtubePlayerToken || !youtubeIsPlaying) return;
+    const targetVolume = Math.max(0, Math.min(100, Number(state.targetVolume) || 0));
+    if (targetVolume <= 0) {
+      state.phase = "normal";
+      startNormalPlaybackMonitor_(state.token);
+      return;
+    }
+
+    let currentVolume = 0;
+    let isMuted = false;
+    try {
+      const observed = Number(youtubePlayer.getVolume && youtubePlayer.getVolume());
+      if (Number.isFinite(observed)) currentVolume = Math.max(0, Math.min(100, observed));
+      isMuted = Boolean(youtubePlayer.isMuted && youtubePlayer.isMuted());
+    } catch {}
+
+    if (isMuted || currentVolume < targetVolume - 1) {
+      const fadeStartVolume = isMuted && currentVolume >= targetVolume - 1 ? 0 : currentVolume;
+      state.phase = "fading-in";
+      state.endFadeStarted = false;
+      runPlaylistVolumeFade_(fadeStartVolume, targetVolume, 520, t => 1 - Math.pow(1 - t, 3), () => {
+        if (!normalPlaybackFadeState || normalPlaybackFadeState.token !== state.token) return;
+        normalPlaybackFadeState.phase = "normal";
+        normalPlaybackFadeState.endFadeStarted = false;
+        startNormalPlaybackMonitor_(state.token);
+      }, { muteUntilAudible: true });
+    } else {
+      state.phase = "normal";
+    }
     startNormalPlaybackMonitor_(state.token);
   }
 
@@ -4944,16 +5056,30 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
-        if (youtubeShareAutoplayActive) showYoutubeShareMutedNotice_();
-        else hideYoutubeShareMutedNotice_();
-        if (playlistPlayback && playlistPlayback.active) {
-          handlePlaylistPlaybackPlaying_();
-          setupMediaSessionPlaybackControls_();
-          scheduleMediaSessionRefresh_();
-        } else if (youtubeShareAutoplayActive) {
-          startNormalPlaybackMonitor_(token);
+        if (youtubeShareAutoplayActive) {
+          const shareState = normalPlaybackFadeState;
+          if (shareState && shareState.token === token && shareState.shareAudioRestored) {
+            hideYoutubeShareMutedNotice_();
+            if (shareState.phase === "paused" || shareState.phase === "fading-in" || shareState.phase === "ended") {
+              resumeYoutubeShareAudioAfterPause_(shareState);
+            } else {
+              shareState.phase = "normal";
+              startNormalPlaybackMonitor_(token);
+            }
+          } else {
+            if (shareState && shareState.token === token) shareState.phase = "share-muted";
+            showYoutubeShareMutedNotice_();
+            startNormalPlaybackMonitor_(token);
+          }
         } else {
-          handleNormalPlaybackPlaying_(token);
+          hideYoutubeShareMutedNotice_();
+          if (playlistPlayback && playlistPlayback.active) {
+            handlePlaylistPlaybackPlaying_();
+            setupMediaSessionPlaybackControls_();
+            scheduleMediaSessionRefresh_();
+          } else {
+            handleNormalPlaybackPlaying_(token);
+          }
         }
         startPlaylistSegmentWatcher_();
         break;
@@ -4985,8 +5111,12 @@
         } else if (normalPlaybackFadeState && normalPlaybackFadeState.token === token) {
           clearPlaylistVolumeFade_();
           clearNormalPlaybackMonitor_();
-          setPlaylistVolumeImmediately_(0);
-          normalPlaybackFadeState.phase = "paused";
+          if (youtubeShareAutoplayActive) {
+            normalPlaybackFadeState.phase = normalPlaybackFadeState.shareAudioRestored ? "paused" : "share-muted";
+          } else {
+            setPlaylistVolumeImmediately_(0);
+            normalPlaybackFadeState.phase = "paused";
+          }
           normalPlaybackFadeState.endFadeStarted = false;
         }
         break;
@@ -5008,8 +5138,12 @@
         } else {
           clearNormalPlaybackMonitor_();
           if (normalPlaybackFadeState && normalPlaybackFadeState.token === token) {
-            normalPlaybackFadeState.phase = "ended";
-            setPlaylistVolumeImmediately_(0);
+            if (youtubeShareAutoplayActive) {
+              normalPlaybackFadeState.phase = normalPlaybackFadeState.shareAudioRestored ? "ended" : "share-muted";
+            } else {
+              normalPlaybackFadeState.phase = "ended";
+              setPlaylistVolumeImmediately_(0);
+            }
           }
         }
         break;
