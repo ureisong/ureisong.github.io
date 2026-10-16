@@ -407,7 +407,7 @@
     if (!isLocalDevelopmentHost_()) {
       const startupSettingsRows = await loadSettingsRows(true);
       currentSettingsRows = startupSettingsRows;
-      if (shouldShowMaintenanceScreen_(startupSettingsRows)) {
+      if (shouldShowMaintenanceScreenForEntry_(startupSettingsRows, initialSongId)) {
         renderMaintenanceScreen_();
         return;
       }
@@ -457,6 +457,10 @@
   function shouldShowMaintenanceScreen_(settingsRows) {
     const value = String(getSettingValue(settingsRows, "site_open") || "").trim().toUpperCase();
     return value === "FALSE";
+  }
+
+  function shouldShowMaintenanceScreenForEntry_(settingsRows, initialSongId) {
+    return shouldShowMaintenanceScreen_(settingsRows) && !String(initialSongId || "").trim();
   }
 
   function renderMaintenanceScreen_() {
