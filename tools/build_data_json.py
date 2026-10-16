@@ -161,12 +161,14 @@ def _song_title_key(value: Any) -> str:
     return _normalized_identity_text(text)
 
 def _split_multi_identity(value: Any) -> List[str]:
-    parts = [part.strip() for part in str(value or "").split(" & ") if part.strip()]
+    parts = [part.strip() for part in re.split(r"(?:\s+&\s*|\s*&\s+)", str(value or "")) if part.strip()]
     return parts or ([str(value).strip()] if str(value or "").strip() else [""])
 
 def _artist_identity_values(value: Any) -> List[str]:
     values: List[str] = []
     for part in _split_multi_identity(value):
+        if part == "❓":
+            continue
         match = re.fullmatch(r"(.*?)\s*\(ㅨ(.*?)\)\s*", part)
         if match and match.group(1).strip() and match.group(2).strip():
             character_name = match.group(1).strip()

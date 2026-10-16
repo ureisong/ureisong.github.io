@@ -2881,7 +2881,7 @@
         return;
       }
 
-      const artistText = getRawDisplayArtist(song);
+      const artistText = formatSungSongArtistText_(song.artist) || getRawDisplayArtist(song);
       const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
       const label = `${titleText} - ${artistText}`;
 
@@ -2894,7 +2894,7 @@
     if (mode === "song") {
       (songbookItems || []).forEach(songbookItem => {
         const titleText = getCanonicalSungTitleText_(songbookItem.title) || "곡명 없음";
-        const artistText = String(songbookItem.artist || "").trim() || "아티스트 없음";
+        const artistText = formatSungSongArtistText_(songbookItem.artist) || String(songbookItem.artist || "").trim() || "아티스트 없음";
         const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
         if (!map.has(key)) {
           map.set(key, { key, label: `${titleText} - ${artistText}`, items: [], songbookOnly: true });
@@ -2957,11 +2957,15 @@
     if (!raw) return [];
 
     const values = raw
-      .split(" & ")
+      .split(/(?:\s+&\s*|\s*&\s+)/u)
       .map(item => item.trim())
       .filter(Boolean);
 
     return values.length ? [...new Set(values)] : [];
+  }
+
+  function isUnknownArtistValue_(value) {
+    return String(value || "").trim() === "❓";
   }
 
   function parseSpecialArtistDisplayRule_(value) {
@@ -2983,9 +2987,14 @@
   function formatArtistValueForDisplay_(value) {
     const text = String(value || "").trim();
     if (!text) return "";
+    if (isUnknownArtistValue_(text)) return "";
     const special = parseSpecialArtistDisplayRule_(text);
     if (special) return special.display;
-    return text.replaceAll("ㅨ", "").replace(/\s{2,}/g, " ").trim();
+    return text
+      .replace(/\(\s*ㅨ\s*([^)]*?)\s*\)/gu, "($1)")
+      .replaceAll("ㅨ", "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
   }
 
   function formatArtistTextForDisplay_(value, separator = " & ") {
@@ -2994,13 +3003,24 @@
     return values.map(formatArtistValueForDisplay_).filter(Boolean).join(separator);
   }
 
+  function formatSungSongArtistText_(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const values = splitMultiValue(raw);
+    if (!values.length) return isUnknownArtistValue_(raw) ? "(아티스트 정보없음)" : formatArtistValueForDisplay_(raw);
+    return values
+      .map(item => isUnknownArtistValue_(item) ? "(아티스트 정보없음)" : formatArtistValueForDisplay_(item))
+      .filter(Boolean)
+      .join(" & ");
+  }
+
   function getArtistDisplayValues_(song) {
     return getArtistValues(song).map(formatArtistValueForDisplay_).filter(Boolean);
   }
 
   function getArtistSearchValuesForValue_(value) {
     const raw = String(value || "").trim();
-    if (!raw) return [];
+    if (!raw || isUnknownArtistValue_(raw)) return [];
     const special = parseSpecialArtistDisplayRule_(raw);
     const values = special
       ? [special.characterName, special.vocalistName, special.display, raw]
@@ -3014,11 +3034,12 @@
 
   function getArtistBadgeDescriptors_(song) {
     return getArtistValues(song).map(value => {
+      if (isUnknownArtistValue_(value)) return null;
       const special = parseSpecialArtistDisplayRule_(value);
       const label = special ? special.vocalistName : formatArtistValueForDisplay_(value);
       const filterValue = special ? special.vocalistName : formatArtistValueForDisplay_(value);
       return { label, filterValue };
-    }).filter(item => item.label && item.label !== "-");
+    }).filter(item => item && item.label && item.label !== "-");
   }
 
   function formatDisplaySongTitleText_(value) {
