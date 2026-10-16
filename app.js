@@ -4497,19 +4497,19 @@
       shareMutedDismissLayer.addEventListener("pointerdown", event => {
         event.preventDefault();
         event.stopPropagation();
-        dismissYoutubeShareMutedNotice_();
+        dismissYoutubeShareMutedNotice_(true);
       });
     }
     if (shareMutedNotice) {
       shareMutedNotice.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
-        dismissYoutubeShareMutedNotice_();
+        dismissYoutubeShareMutedNotice_(true);
       });
       shareMutedNotice.addEventListener("keydown", event => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        dismissYoutubeShareMutedNotice_();
+        dismissYoutubeShareMutedNotice_(true);
       });
     }
     const bindStableNav = (button, action) => {
@@ -4780,10 +4780,9 @@
               let targetVolume = 100;
               try {
                 const observedVolume = Number(event.target.getVolume && event.target.getVolume());
-                if (Number.isFinite(observedVolume)) targetVolume = Math.max(1, Math.min(100, observedVolume));
+                if (Number.isFinite(observedVolume)) targetVolume = Math.max(0, Math.min(100, observedVolume));
               } catch {}
               event.target.mute();
-              setPlaylistAutomatedVolume_(event.target, 0);
               normalPlaybackFadeState = { token, targetVolume, phase: "share-muted", endFadeStarted: false };
             } else if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
               playlistPlayback.baseVolume = getPlaylistPreferredVolume_();
@@ -4838,19 +4837,50 @@
     notice.classList.add("is-visible");
   }
 
-  function hideYoutubeShareMutedNotice_() {
+  function hideYoutubeShareMutedNotice_(keepPlayerInteractionCapture = false) {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
     const dismissLayer = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
     if (notice) {
       notice.classList.remove("is-visible");
       notice.hidden = true;
     }
-    if (dismissLayer) dismissLayer.hidden = true;
+    if (dismissLayer) {
+      const canCapturePlayerInteraction = keepPlayerInteractionCapture && youtubeShareAutoplayActive &&
+        normalPlaybackFadeState && normalPlaybackFadeState.phase === "share-muted";
+      dismissLayer.hidden = !canCapturePlayerInteraction;
+    }
   }
 
-  function dismissYoutubeShareMutedNotice_() {
+  function dismissYoutubeShareMutedNotice_(restoreAudio = false) {
     youtubeShareMutedNoticeDismissed = true;
+    const keepPlayerInteractionCapture = !restoreAudio && youtubeShareAutoplayActive &&
+      normalPlaybackFadeState && normalPlaybackFadeState.phase === "share-muted";
+    hideYoutubeShareMutedNotice_(Boolean(keepPlayerInteractionCapture));
+    if (restoreAudio) restoreYoutubeShareMutedAudio_();
+  }
+
+  function restoreYoutubeShareMutedAudio_() {
+    const state = normalPlaybackFadeState;
+    if (!youtubeShareAutoplayActive || !state || state.phase !== "share-muted" || !youtubePlayer ||
+        state.token !== youtubePlayerToken || !youtubeIsPlaying) return;
+
+    const targetVolume = Math.max(0, Math.min(100, Number(state.targetVolume) || 0));
     hideYoutubeShareMutedNotice_();
+    if (targetVolume <= 0) {
+      state.phase = "normal";
+      startNormalPlaybackMonitor_(state.token);
+      return;
+    }
+
+    state.phase = "fading-in";
+    state.endFadeStarted = false;
+    runPlaylistVolumeFade_(0, targetVolume, 520, t => 1 - Math.pow(1 - t, 3), () => {
+      if (!normalPlaybackFadeState || normalPlaybackFadeState.token !== state.token) return;
+      normalPlaybackFadeState.phase = "normal";
+      normalPlaybackFadeState.endFadeStarted = false;
+      startNormalPlaybackMonitor_(state.token);
+    }, { muteUntilAudible: true });
+    startNormalPlaybackMonitor_(state.token);
   }
 
   function dismissYoutubeShareMutedNoticeOutside_(event) {
