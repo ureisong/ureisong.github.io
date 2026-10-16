@@ -4530,13 +4530,13 @@ body.site-maintenance > :not(#maintenanceScreen) {
 .maintenance-screen-text::before {
   color: #8ccfff;
   text-shadow: -2px 0 rgba(140, 207, 255, 0.58);
-  animation: maintenanceGlitchA 5.8s steps(1, end) infinite;
+  animation: maintenanceGlitchA 0.5s steps(1, end) infinite;
 }
 
 .maintenance-screen-text::after {
   color: #ff8bae;
   text-shadow: 2px 0 rgba(255, 139, 174, 0.58);
-  animation: maintenanceGlitchB 5.8s steps(1, end) infinite;
+  animation: maintenanceGlitchB 0.5s steps(1, end) infinite;
 }
 
 @keyframes maintenanceGlitchA {
