@@ -35,6 +35,8 @@
   let searchAliases = {};
   let currentSettingsRows = [];
   let settingsRowsPromise = null;
+  let activeSongsVersion = "";
+  let activeSearchAliasesVersion = "";
   let searchAliasesLoadedFromData = false;
   let searchRenderTimer = null;
   let filterApplyPending = false;
@@ -339,6 +341,8 @@
   let youtubeSlowSecondTimer = null;
   let youtubeNoResponseTimer = null;
   let youtubeStartedPlaying = false;
+  let youtubeShareAutoplayActive = false;
+  let youtubeShareMutedNoticeDismissed = false;
   let youtubeInitialLoadingSuppressed = false;
   let youtubeAwaitingManualPlayback = false;
   let currentYoutubeLoadingText = "";
@@ -465,8 +469,10 @@
 
   function renderMaintenanceScreen_() {
     hidePageLoading();
+    if (els.youtubeModal && !els.youtubeModal.hidden) closeYoutubeModal(true);
     document.documentElement.classList.add("site-maintenance");
     document.body.classList.add("site-maintenance");
+    if (document.getElementById("maintenanceScreen")) return;
 
     const screen = document.createElement("main");
     screen.id = "maintenanceScreen";
@@ -496,6 +502,7 @@
   }
 
   function bindEvents() {
+    document.addEventListener("pointerdown", dismissYoutubeShareMutedNoticeOutside_, true);
     els.searchInput.addEventListener("input", () => {
       applyFilterResultPanelState({ preserveSung: true });
       if (searchRenderTimer) window.clearTimeout(searchRenderTimer);
@@ -1069,6 +1076,7 @@
 
     if (!SEARCH_ALIASES_CSV_URL) {
       searchAliases = normalizeSearchAliasesObject(fallback);
+      searchAliasesLoadedFromData = true;
       return;
     }
 
@@ -1083,10 +1091,16 @@
       });
 
       searchAliases = normalizeSearchAliasesRows(aliasRows);
+      activeSearchAliasesVersion = version || "";
+      searchAliasesLoadedFromData = true;
+      saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
     } catch (err) {
       console.warn("[search_aliases 로딩 실패]", err);
       const cached = readVersionedCsvCache("search_aliases");
       searchAliases = cached ? normalizeSearchAliasesRows(cached.rows || []) : normalizeSearchAliasesObject(fallback);
+      activeSearchAliasesVersion = cached ? String(cached.version || "") : "";
+      searchAliasesLoadedFromData = true;
+      saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
     }
   }
 
@@ -1164,12 +1178,13 @@
 
   function loadSettingsRows(forceNetwork = false) {
     if (!SETTINGS_CSV_URL) return Promise.resolve([]);
-    if (settingsRowsPromise) return settingsRowsPromise;
+    if (settingsRowsPromise && !forceNetwork) return settingsRowsPromise;
 
     settingsRowsPromise = (async () => {
       try {
-        const text = await fetchText(SETTINGS_CSV_URL, forceNetwork);
-        const rows = parseCsv(text);
+        const rows = forceNetwork
+          ? await fetchSettingsRowsFresh_()
+          : parseCsv(await fetchText(SETTINGS_CSV_URL, false));
         if (!rows.length) throw new Error("설정 CSV가 비어 있습니다.");
         return rows;
       } catch (err) {
@@ -1178,6 +1193,17 @@
       }
     })();
     return settingsRowsPromise;
+  }
+
+  async function fetchSettingsRowsFresh_() {
+    if (!SETTINGS_CSV_URL) return [];
+    const url = new URL(SETTINGS_CSV_URL, window.location.href);
+    url.searchParams.set("_ts", String(Date.now()));
+    const response = await fetch(url.toString(), { cache: "no-store" });
+    if (!response.ok) throw new Error(`설정 CSV 응답 오류: ${response.status}`);
+    const rows = parseCsv(await response.text());
+    if (!rows.length) throw new Error("설정 CSV가 비어 있습니다.");
+    return rows;
   }
 
   function getSettingValue(rows, keyName) {
@@ -1194,7 +1220,10 @@
       return cached.rows || [];
     }
 
-    const text = await fetchText(url, forceNetwork);
+    const cachedVersionIsOlder = Boolean(normalizedVersion) &&
+      (!cached || !String(cached.version || "").trim() || compareVersionText(cached.version, normalizedVersion) < 0);
+    const shouldFetchFresh = forceNetwork || cachedVersionIsOlder;
+    const text = await fetchText(url, shouldFetchFresh);
     const rows = parser(text);
     writeVersionedCsvCache(cacheName, rows, normalizedVersion);
     return rows;
@@ -1228,10 +1257,50 @@
     return aa.localeCompare(bb, undefined, { numeric: true, sensitivity: "base" });
   }
 
+  function getPayloadDataVersion_(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return String(payload.dataVersion || payload.data_version ||
+      (payload.settings && payload.settings[SETTINGS_VERSION_SONGS]) || "").trim();
+  }
+
+  function getPayloadSearchAliasesVersion_(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    return String(payload.searchAliasesVersion || payload.search_aliases_version ||
+      (payload.settings && payload.settings[SETTINGS_VERSION_SEARCH_ALIASES]) || "").trim();
+  }
+
+  function isPayloadSongsVersionCurrentForSettings_(payload, settingsRows) {
+    const requiredSongsVersion = getSettingValue(settingsRows, SETTINGS_VERSION_SONGS);
+    if (!requiredSongsVersion) return true;
+    const payloadVersion = getPayloadDataVersion_(payload);
+    return Boolean(payloadVersion) && compareVersionText(payloadVersion, requiredSongsVersion) >= 0;
+  }
+
+  function isPayloadVersionCurrentForSettings_(payload, settingsRows) {
+    if (!isPayloadSongsVersionCurrentForSettings_(payload, settingsRows)) return false;
+
+    const requiredAliasesVersion = getSettingValue(settingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
+    if (requiredAliasesVersion && SEARCH_ALIASES_CSV_URL) {
+      const payloadAliasesVersion = getPayloadSearchAliasesVersion_(payload);
+      if (!payloadAliasesVersion || compareVersionText(payloadAliasesVersion, requiredAliasesVersion) < 0) return false;
+    }
+    return true;
+  }
+
+  function saveSearchAliasesToLocalDataCache_(aliases, version) {
+    const cached = readLocalJsonCache();
+    if (!cached || !Array.isArray(cached.data)) return;
+    cached.searchAliases = normalizeSearchAliasesObject(aliases);
+    cached.searchAliasesVersion = String(version || "").trim();
+    writeLocalJsonCache(cached);
+  }
+
   async function loadData(forceNetwork = false, settingsRows = null) {
     const cachedAtStart = !forceNetwork ? readLocalJsonCache() : null;
     const cachedSongsAtStart = cachedAtStart && (Array.isArray(cachedAtStart.data) ? cachedAtStart.data : Array.isArray(cachedAtStart) ? cachedAtStart : []);
-    const hasUsableLocalCache = Array.isArray(cachedSongsAtStart) && cachedSongsAtStart.length > 0;
+    const effectiveSettingsForCache = Array.isArray(settingsRows) && settingsRows.length ? settingsRows : currentSettingsRows;
+    const hasUsableLocalCache = Array.isArray(cachedSongsAtStart) && cachedSongsAtStart.length > 0 &&
+      isPayloadSongsVersionCurrentForSettings_(cachedAtStart, effectiveSettingsForCache);
     if (!hasUsableLocalCache) {
       showPageLoading(
         "...LOADING...",
@@ -1246,10 +1315,21 @@
       if (!forceNetwork) {
         const cached = cachedAtStart;
         if (cached && hasUsableLocalCache) {
+          activeSongsVersion = getPayloadDataVersion_(cached);
           allSongs = normalizeSongs(cached.data || cached);
           songbookSongs = normalizeSongbookSongs(cached.songbook || []);
-          if (cached.searchAliases && typeof cached.searchAliases === "object") {
-            searchAliases = normalizeSearchAliasesObject(cached.searchAliases);
+          const cachedAliasesObject = cached.searchAliases && typeof cached.searchAliases === "object"
+            ? cached.searchAliases
+            : null;
+          const requiredAliasesVersion = getSettingValue(effectiveSettingsForCache, SETTINGS_VERSION_SEARCH_ALIASES);
+          const cachedAliasesVersion = getPayloadSearchAliasesVersion_(cached);
+          const cachedAliasesAreCurrent = !SEARCH_ALIASES_CSV_URL || !requiredAliasesVersion ||
+            Boolean(cachedAliasesObject && cachedAliasesVersion &&
+              compareVersionText(cachedAliasesVersion, requiredAliasesVersion) >= 0);
+          if (cachedAliasesObject) searchAliases = normalizeSearchAliasesObject(cachedAliasesObject);
+          if (cachedAliasesAreCurrent && cachedAliasesObject) {
+            activeSearchAliasesVersion = cachedAliasesVersion;
+            searchAliasesLoadedFromData = true;
           }
           currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
@@ -1269,13 +1349,21 @@
           renderChannelSection();
           buildFilters(allSongs, songbookSongs);
           applyAndRender(true);
+          if (!searchAliasesLoadedFromData) {
+            await loadSearchAliases(false, effectiveSettingsForCache);
+            buildFilters(allSongs, songbookSongs);
+            applyAndRender(true);
+          }
           setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+          return;
         }
       }
 
       const payload = await fetchSongsPayload(forceNetwork, settingsRows);
+      activeSongsVersion = getPayloadDataVersion_(payload) || getSettingValue(settingsRows || currentSettingsRows, SETTINGS_VERSION_SONGS);
       if (payload.searchAliases && typeof payload.searchAliases === "object") {
         searchAliases = normalizeSearchAliasesObject(payload.searchAliases);
+        activeSearchAliasesVersion = getPayloadSearchAliasesVersion_(payload);
         searchAliasesLoadedFromData = true;
       }
       allSongs = normalizeSongs(payload.data || payload || []);
@@ -1308,7 +1396,9 @@
         recs: recItems,
         channels: channelItems,
         searchAliases,
+        searchAliasesVersion: getPayloadSearchAliasesVersion_(payload) || activeSearchAliasesVersion,
         settings: { like_post_enabled: likePostEnabled, playlist_enabled: playlistEnabled ? "TRUE" : "FALSE" },
+        dataVersion: activeSongsVersion,
         saved_at: Date.now()
       });
 
@@ -1320,7 +1410,9 @@
       console.error("[데이터 로딩 실패]", err);
       const cached = readLocalJsonCache();
       const cachedSongs = cached && (Array.isArray(cached.data) ? cached.data : Array.isArray(cached) ? cached : []);
-      if (Array.isArray(cachedSongs) && cachedSongs.length) {
+      if (Array.isArray(cachedSongs) && cachedSongs.length &&
+          isPayloadSongsVersionCurrentForSettings_(cached, settingsRows || currentSettingsRows)) {
+        activeSongsVersion = getPayloadDataVersion_(cached);
         allSongs = normalizeSongs(cachedSongs);
         songbookSongs = normalizeSongbookSongs(cached.songbook || []);
         currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
@@ -1373,16 +1465,26 @@
         if (data.some(row => !row || !String(row.id || "").trim())) {
           throw new Error("data.json에 유효하지 않은 곡 데이터가 포함되어 있습니다.");
         }
+        const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
+          ? settingsRows
+          : (Array.isArray(currentSettingsRows) ? currentSettingsRows : []);
+        const requiredSongsVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS);
+        const jsonSongsVersion = String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SONGS]) || "").trim();
+        if (requiredSongsVersion && (!jsonSongsVersion || compareVersionText(jsonSongsVersion, requiredSongsVersion) < 0)) {
+          throw new Error(`data.json 버전(${jsonSongsVersion || "없음"})이 설정 시트 버전(${requiredSongsVersion})보다 낮습니다.`);
+        }
+        const requiredAliasesVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
+        const jsonAliasesVersion = String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SEARCH_ALIASES]) || "").trim();
+        const jsonAliasesAreCurrent = !requiredAliasesVersion || !SEARCH_ALIASES_CSV_URL ||
+          Boolean(jsonAliasesVersion) && compareVersionText(jsonAliasesVersion, requiredAliasesVersion) >= 0;
         let songbookRows = Array.isArray(json) ? [] : (Array.isArray(json.songbook) ? json.songbook : []);
         if (!songbookRows.length && SONGBOOK_CSV_URL) {
-          const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
-            ? settingsRows
-            : (Array.isArray(currentSettingsRows) && currentSettingsRows.length)
-              ? currentSettingsRows
-              : await loadSettingsRows();
-          currentSettingsRows = effectiveSettingsRows;
-          const songbookVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS)
-            || String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SONGS]) || "").trim();
+          const songbookSettingsRows = effectiveSettingsRows.length
+            ? effectiveSettingsRows
+            : await loadSettingsRows();
+          currentSettingsRows = songbookSettingsRows;
+          const songbookVersion = getSettingValue(songbookSettingsRows, SETTINGS_VERSION_SONGS)
+            || jsonSongsVersion;
           songbookRows = await loadSongbookCsvRows_(songbookVersion, forceNetwork);
         }
         return {
@@ -1397,7 +1499,9 @@
           h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
           h1Visible: Array.isArray(json) ? false : (json.h1Visible === true),
           settings: Array.isArray(json) ? null : (json.settings || null),
-          searchAliases: Array.isArray(json) ? null : (json.searchAliases || null),
+          searchAliases: jsonAliasesAreCurrent && !Array.isArray(json) ? (json.searchAliases || null) : null,
+          searchAliasesVersion: jsonAliasesVersion,
+          dataVersion: jsonSongsVersion || requiredSongsVersion,
           generated_at: Array.isArray(json) ? "" : (json.generated_at || "")
         };
       } catch (err) {
@@ -1457,7 +1561,8 @@
         title: pageMeta.title,
         h1: pageMeta.h1,
         h1Visible: pageMeta.h1Visible,
-        settings
+        settings,
+        dataVersion: songsVersion
       };
     }
 
@@ -3695,7 +3800,7 @@
 
   function tryOpenInitialSongFromLocalCache_(requestedId, payload) {
     const id = String(requestedId || "").trim();
-    if (!id || !payload) return false;
+    if (!id || !payload || !isPayloadVersionCurrentForSettings_(payload, currentSettingsRows)) return false;
 
     const song = findSongInCachedPayload_(payload, id);
     if (!song || !String(song.link || "").trim()) return false;
@@ -4379,11 +4484,34 @@
       <button class="youtube-side-nav youtube-side-next" type="button" aria-label="다음곡"></button>
       <button class="youtube-side-time youtube-side-time-current" type="button" aria-label="10초 전으로 이동" title="10초 전으로 이동">00:00</button>
       <button class="youtube-side-time youtube-side-time-remaining" type="button" aria-label="10초 후로 이동" title="10초 후로 이동">-00:00</button>
+      <div class="youtube-share-muted-dismiss-layer" hidden aria-hidden="true"></div>
+      <div class="youtube-share-muted-notice" role="button" tabindex="0" aria-label="음소거 안내 닫기" aria-live="polite" hidden>현재 음소거 상태로 자동 재생 중입니다.</div>
     `;
     const prev = els.youtubeFrameWrap.querySelector(".youtube-side-prev");
     const next = els.youtubeFrameWrap.querySelector(".youtube-side-next");
     const currentTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-current");
     const remainingTimeButton = els.youtubeFrameWrap.querySelector(".youtube-side-time-remaining");
+    const shareMutedNotice = els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    const shareMutedDismissLayer = els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
+    if (shareMutedDismissLayer) {
+      shareMutedDismissLayer.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissYoutubeShareMutedNotice_();
+      });
+    }
+    if (shareMutedNotice) {
+      shareMutedNotice.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissYoutubeShareMutedNotice_();
+      });
+      shareMutedNotice.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        dismissYoutubeShareMutedNotice_();
+      });
+    }
     const bindStableNav = (button, action) => {
       if (!button) return;
       button.addEventListener("pointerdown", event => {
@@ -4449,6 +4577,8 @@
     }
 
     const startSeconds = getYoutubeStartSecondsFromRawUrl(url);
+    youtubeShareAutoplayActive = modalOptions.shareAutoplayWait === true;
+    youtubeShareMutedNoticeDismissed = false;
     const timelineText = String(meta.timeline || "").trim();
     const endText = String(meta.end || "").trim();
     const hasTimelineValue = timelineText !== "" && /^\d+(?::[0-5]?\d){0,2}$/.test(timelineText);
@@ -4542,6 +4672,8 @@
     setModalArtistText_("");
     setModalFooterText("");
     currentModalSongId = "";
+    youtubeShareAutoplayActive = false;
+    youtubeShareMutedNoticeDismissed = false;
     youtubeInitialLoadingSuppressed = false;
     youtubeAwaitingManualPlayback = false;
     clearYoutubeShareAutoplayWaitTimer_();
@@ -4618,8 +4750,10 @@
       showYoutubeLoadingMessage(getCurrentYoutubeLoadingText_(), { preserveInitial: true });
     }
 
+    const shareAutoplay = Boolean(options && options.shareAutoplay === true);
     const playerVars = {
-      autoplay: options && options.shareAutoplay === true ? 0 : 1,
+      autoplay: shareAutoplay ? 0 : 1,
+      mute: shareAutoplay ? 1 : 0,
       playsinline: 1,
       rel: 0,
       vq: "hd1080",
@@ -4642,10 +4776,16 @@
         onReady: event => {
           if (!isCurrentYoutubeToken_(token)) return;
           try {
-            if (options && options.shareAutoplay === true && event.target && typeof event.target.mute === "function") {
+            if (shareAutoplay && event.target && typeof event.target.mute === "function") {
+              let targetVolume = 100;
+              try {
+                const observedVolume = Number(event.target.getVolume && event.target.getVolume());
+                if (Number.isFinite(observedVolume)) targetVolume = Math.max(1, Math.min(100, observedVolume));
+              } catch {}
               event.target.mute();
-            }
-            if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
+              setPlaylistAutomatedVolume_(event.target, 0);
+              normalPlaybackFadeState = { token, targetVolume, phase: "share-muted", endFadeStarted: false };
+            } else if (playlistPlayback && playlistPlayback.active && event.target.setVolume) {
               playlistPlayback.baseVolume = getPlaylistPreferredVolume_();
               playlistPlayback.volumeMode = "starting";
               playlistPlayback.resumeVolume = 0;
@@ -4675,7 +4815,7 @@
           youtubeAwaitingManualPlayback = true;
           clearYoutubeLoadingStatusTimer_();
           clearYoutubeBufferingTimer_();
-          showYoutubeLoadingMessage("브라우저가 자동 재생을 차단했어요. 재생 버튼을 눌러주세요.");
+          showYoutubeLoadingMessage("자동 재생이 차단됐어요. 영상의 재생 버튼을 눌러주세요.");
           youtubeShareAutoplayWaitTimer = window.setTimeout(() => {
             if (!isCurrentYoutubeToken_(token) || youtubeStartedPlaying) return;
             hideYoutubeLoading(false, 0);
@@ -4685,6 +4825,38 @@
         onError: event => handleYoutubePlayerError_(event, youtubePlayerToken)
       }
     });
+  }
+
+  function showYoutubeShareMutedNotice_() {
+    const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    const dismissLayer = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
+    if (!notice || !youtubeShareAutoplayActive || youtubeShareMutedNoticeDismissed) return;
+    if (dismissLayer) dismissLayer.hidden = false;
+    notice.hidden = false;
+    notice.classList.remove("is-visible");
+    void notice.offsetWidth;
+    notice.classList.add("is-visible");
+  }
+
+  function hideYoutubeShareMutedNotice_() {
+    const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    const dismissLayer = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-dismiss-layer");
+    if (notice) {
+      notice.classList.remove("is-visible");
+      notice.hidden = true;
+    }
+    if (dismissLayer) dismissLayer.hidden = true;
+  }
+
+  function dismissYoutubeShareMutedNotice_() {
+    youtubeShareMutedNoticeDismissed = true;
+    hideYoutubeShareMutedNotice_();
+  }
+
+  function dismissYoutubeShareMutedNoticeOutside_(event) {
+    const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    if (!notice || notice.hidden || notice.contains(event.target)) return;
+    dismissYoutubeShareMutedNotice_();
   }
 
   function loadYoutubeMediaIntoExistingPlayer_(videoId, startSeconds, token, options = {}) {
@@ -4742,10 +4914,14 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
+        if (youtubeShareAutoplayActive) showYoutubeShareMutedNotice_();
+        else hideYoutubeShareMutedNotice_();
         if (playlistPlayback && playlistPlayback.active) {
           handlePlaylistPlaybackPlaying_();
           setupMediaSessionPlaybackControls_();
           scheduleMediaSessionRefresh_();
+        } else if (youtubeShareAutoplayActive) {
+          startNormalPlaybackMonitor_(token);
         } else {
           handleNormalPlaybackPlaying_(token);
         }
@@ -4771,6 +4947,7 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 0);
+        hideYoutubeShareMutedNotice_();
         if (playlistPlayback && playlistPlayback.active) {
           if (!youtubeStartedPlaying && playlistPlayback.volumeMode === "starting") break;
           handlePlaylistPlaybackPaused_();
@@ -4791,6 +4968,7 @@
         clearYoutubeLoadingStatusTimer_();
         clearYoutubeBufferingTimer_();
         hideYoutubeLoading(false, 180);
+        hideYoutubeShareMutedNotice_();
         if (playlistPlayback && playlistPlayback.active) {
           if (!playlistPlayback.repeat && playlistPlayback.index >= playlistPlayback.queue.length - 1) {
             finishPlaylistPlayback_();

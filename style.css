@@ -1169,6 +1169,74 @@ html.dark-mode .like-button.liking {
   display: block;
 }
 
+.youtube-share-muted-dismiss-layer {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  background: transparent;
+  cursor: default;
+  touch-action: manipulation;
+}
+.youtube-share-muted-dismiss-layer[hidden] { display: none !important; }
+
+.youtube-share-muted-notice {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: clamp(44px, 7vw, 60px);
+  transform: translate(-50%, 8px);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 28px);
+  padding: 11px 16px;
+  border: 1px solid rgba(220, 205, 255, 0.34);
+  border-radius: 14px;
+  color: #f8f4ff;
+  background: rgba(29, 19, 45, 0.94);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+  font: inherit;
+  font-size: clamp(12px, 1.4vw, 14px);
+  font-weight: 650;
+  line-height: 1.45;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: auto;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.youtube-share-muted-notice::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  border-right: 1px solid rgba(220, 205, 255, 0.34);
+  border-bottom: 1px solid rgba(220, 205, 255, 0.34);
+  background: rgba(29, 19, 45, 0.94);
+  transform: translateX(-50%) rotate(45deg);
+}
+.youtube-share-muted-notice[hidden] { display: none !important; }
+.youtube-share-muted-notice.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  animation: youtubeMutedNoticeIn 220ms cubic-bezier(.2,.8,.2,1) both;
+}
+.youtube-share-muted-notice:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+}
+@keyframes youtubeMutedNoticeIn {
+  from { opacity: 0; transform: translate(-50%, 8px) scale(.97); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .youtube-share-muted-notice.is-visible { animation: none; }
+}
+
 .youtube-side-nav {
   position: absolute;
   top: 50%;
