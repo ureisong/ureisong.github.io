@@ -29,6 +29,7 @@
   const CSV_CACHE_PREFIX = "csv_cache_";
   const SONGS_CSV_CACHE_NAME = "songs_csv_cache";
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
+  const LOCAL_DATA_CACHE_SCHEMA_VERSION = 2;
   const SETTINGS_VERSION_SONGS = "version_songs";
   const SETTINGS_VERSION_SEARCH_ALIASES = "version_search_aliases";
   const LIKE_COOLDOWN_MS = Number(CONFIG.LIKE_COOLDOWN_MS || 60000);
@@ -49,7 +50,7 @@
     "노래 목록을 불러오고 있어요…",
     "추가된 노래들이 있는지 확인하고 있어요…",
     "새로운 노래가 있을까나… [img:img/GIF_Popcat.gif]",
-    "잠시만요… 놓친 노래들이 있는지 확인하고 있어요！ [img:img/PNG_Nung.png]",
+    "잠시만요… [img:img/PNG_Nung.png]\n놓친 노래들이 있는지 확인하고 있어요！",
     "모든 [img:img/PNG_Nung.png] 노래를 수집중입니다…"
   ];
   const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
@@ -414,6 +415,7 @@
   let suppressPageLoadingForInitialShare = false;
   let pendingPageLoadingHide = false;
   let selectedPageLoadingMessage = "";
+  let modalFooterMessageTimer = null;
   let currentPageLoadingSubText = "";
   let pageLoadingSubTextLayerIndex = 0;
   let pageLoadingSubTextTransitionFrame = 0;
@@ -1705,6 +1707,7 @@
           sub1: row.sub1,
           sub2: row.sub2,
           sub3: row.sub3,
+          external_link: row.external_link,
           likes_total: like.likes_total,
           updated_at: like.updated_at,
           likes_last_1d: like.likes_last_1d,
@@ -1897,6 +1900,7 @@
           sub1: String(item.sub1 || ""),
           sub2: String(item.sub2 || ""),
           sub3: String(item.sub3 || ""),
+          external_link: String(item.external_link || "").trim(),
           likes_total: toNumber(item.likes_total),
           updated_at: String(item.updated_at || ""),
           likes_last_1d: toNumber(item.likes_last_1d),
@@ -3728,9 +3732,20 @@
 
     return subs
       .map(item => {
-        const url = sanitizeExternalUrl_(song[item.key]);
+        const rawValue = String(song[item.key] || "").trim();
+        if (!rawValue) return "";
+
+        let label = item.label;
+        let rawUrl = rawValue;
+        const customLabelMatch = rawValue.match(/^\[([^\]]+)\]\s*(https?:\/\/\S+)$/i);
+        if (customLabelMatch && String(customLabelMatch[1] || "").trim()) {
+          label = String(customLabelMatch[1]).trim();
+          rawUrl = String(customLabelMatch[2] || "").trim();
+        }
+
+        const url = sanitizeExternalUrl_(rawUrl);
         if (!url) return "";
-        return `<a class="badge badge-link sub-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${item.label}">${item.label}</a>`;
+        return `<a class="badge badge-link sub-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(label)}">${escapeHtml(label)}</a>`;
       })
       .join("");
   }
@@ -4478,11 +4493,61 @@
     document.title = normalDocumentTitle || DEFAULT_DOCUMENT_TITLE;
   }
 
-  function setModalFooterText(text) {
+  function setModalFooterText(text, options = {}) {
     const value = String(text || "");
+    const alternateMessage = String(options && options.alternateMessage || "").trim();
     const target = els.modalSongFooterText || els.modalSongFooter;
+    clearModalFooterMessageRotation_();
     if (!target) return;
-    target.textContent = value;
+
+    target.classList.remove("is-cycling");
+    if (!alternateMessage || alternateMessage === value) {
+      target.textContent = value;
+      return;
+    }
+
+    target.classList.add("is-cycling");
+    target.innerHTML = [value, alternateMessage].map((message, index) =>
+      `<span class="modal-footer-cycle-layer${index === 0 ? " is-active" : ""}"${index === 0 ? '' : ' aria-hidden="true"'}>${formatNoticeTextHtml(message)}</span>`
+    ).join("");
+
+    let activeIndex = 0;
+    const cycleMessage = () => {
+      if (!target.isConnected || (els.youtubeModal && els.youtubeModal.hidden)) {
+        clearModalFooterMessageRotation_();
+        return;
+      }
+      const layers = target.querySelectorAll(".modal-footer-cycle-layer");
+      if (layers.length !== 2) {
+        clearModalFooterMessageRotation_();
+        return;
+      }
+      const nextIndex = activeIndex === 0 ? 1 : 0;
+      layers[activeIndex].classList.remove("is-active");
+      layers[activeIndex].setAttribute("aria-hidden", "true");
+      layers[nextIndex].classList.add("is-active");
+      layers[nextIndex].removeAttribute("aria-hidden");
+      activeIndex = nextIndex;
+      modalFooterMessageTimer = window.setTimeout(cycleMessage, 5000);
+    };
+    modalFooterMessageTimer = window.setTimeout(cycleMessage, 5000);
+  }
+
+  function clearModalFooterMessageRotation_() {
+    if (modalFooterMessageTimer) {
+      window.clearTimeout(modalFooterMessageTimer);
+      modalFooterMessageTimer = null;
+    }
+  }
+
+  function getExternalLinkAlternateMessage_(song) {
+    const rawValue = String(song && song.external_link || "").trim();
+    if (!rawValue) return "";
+    const defaultMessage = "공식 다시보기가 없어요 ! [img:img/PNG_Simuruk.png]";
+    if (/^TRUE$/i.test(rawValue)) return defaultMessage;
+    const match = rawValue.match(/^TRUE\s*,\s*([\s\S]+)$/i);
+    if (!match) return "";
+    return String(match[1] || "").trim() || "";
   }
 
   function encodeShareIdForPath_(songId) {
@@ -4807,7 +4872,7 @@
     currentModalSongId = meta.id || "";
     setModalTitleText_(meta.title || "");
     setModalArtistText_(meta.artist || "");
-    setModalFooterText([meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ "));
+    setModalFooterText([meta.date || "", meta.timeline || ""].filter(Boolean).join(" ／ "), { alternateMessage: getExternalLinkAlternateMessage_(findSongById(currentModalSongId)) });
     updateModalLikePanel(currentModalSongId);
     setupMediaSessionPlaybackControls_();
 
@@ -9942,7 +10007,7 @@
     setModalArtistText_(playable.artist || "");
 
     if (playable.type === "song" && playable.song) {
-      setModalFooterText([formatSongDate(playable.song), playable.song.timeline || ""].filter(Boolean).join(" ／ "));
+      setModalFooterText([formatSongDate(playable.song), playable.song.timeline || ""].filter(Boolean).join(" ／ "), { alternateMessage: getExternalLinkAlternateMessage_(playable.song) });
       updateModalLikePanel(currentModalSongId);
     } else {
       setModalFooterText("");
@@ -10622,13 +10687,10 @@
     const currentLayers = Array.from(container.querySelectorAll(".loader-subtext-layer"));
     if (currentLayers.length === 2) return currentLayers;
 
-    const initialText = String(container.textContent || "").trim();
-    container.innerHTML = '<span class="loader-subtext-layer is-active"></span><span class="loader-subtext-layer" aria-hidden="true"></span>';
+    container.innerHTML = '<span class="loader-subtext-layer" aria-hidden="true"></span><span class="loader-subtext-layer" aria-hidden="true"></span>';
     const layers = Array.from(container.querySelectorAll(".loader-subtext-layer"));
-    layers[0].innerHTML = formatNoticeTextHtml(initialText);
-    layers[0].dataset.loadingMessage = initialText;
     pageLoadingSubTextLayerIndex = 0;
-    currentPageLoadingSubText = initialText;
+    currentPageLoadingSubText = "";
     return layers;
   }
 
@@ -10656,7 +10718,7 @@
       if (index !== outgoingIndex) layer.classList.remove("is-active");
     });
     outgoing.classList.add("is-active");
-    incoming.innerHTML = formatNoticeTextHtml(text);
+    incoming.innerHTML = formatNoticeTextHtml(text).replace(/\r?\n/g, "<br>");
     incoming.dataset.loadingMessage = text;
     incoming.setAttribute("aria-hidden", "false");
     outgoing.setAttribute("aria-hidden", "true");
@@ -11018,7 +11080,9 @@
 
   function readLocalJsonCache() {
     try {
-      return JSON.parse(localStorage.getItem(LOCAL_DATA_CACHE_KEY) || "null");
+      const cached = JSON.parse(localStorage.getItem(LOCAL_DATA_CACHE_KEY) || "null");
+      if (!cached || typeof cached !== "object" || cached.cacheSchemaVersion !== LOCAL_DATA_CACHE_SCHEMA_VERSION) return null;
+      return cached;
     } catch {
       return null;
     }
@@ -11026,7 +11090,10 @@
 
   function writeLocalJsonCache(obj) {
     try {
-      localStorage.setItem(LOCAL_DATA_CACHE_KEY, JSON.stringify(obj));
+      const payload = obj && typeof obj === "object" && !Array.isArray(obj)
+        ? { ...obj, cacheSchemaVersion: LOCAL_DATA_CACHE_SCHEMA_VERSION }
+        : obj;
+      localStorage.setItem(LOCAL_DATA_CACHE_KEY, JSON.stringify(payload));
     } catch {
       //
     }

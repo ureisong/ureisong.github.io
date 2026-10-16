@@ -1516,6 +1516,7 @@ html.dark-mode .page-loading-card {
 
 .loader-subtext {
   display: grid;
+  min-height: 1.45em;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   margin-top: 8px;
   font-size: clamp(13px, 2.2vw, 17px);
@@ -2230,6 +2231,26 @@ body.burnin-shield-open {
   min-width: 0;
   padding: 0 104px;
   text-align: center;
+}
+
+.modal-footer-text.is-cycling {
+  display: grid;
+  align-content: center;
+}
+
+.modal-footer-cycle-layer {
+  grid-area: 1 / 1;
+  display: block;
+  opacity: 0;
+  transition: opacity 280ms ease;
+}
+
+.modal-footer-cycle-layer.is-active {
+  opacity: 1;
+}
+.modal-footer-cycle-layer .notice-inline-image {
+  vertical-align: middle;
+  margin-inline: 2px;
 }
 
 .modal-footer-side {
@@ -3317,7 +3338,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible {
   .cover-carousel { grid-template-columns: 32px minmax(0, 1fr) 32px; gap: 5px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .loader-subtext-layer { transition: none; }
+  .loader-subtext-layer, .modal-footer-cycle-layer { transition: none; }
   html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: .01ms !important;

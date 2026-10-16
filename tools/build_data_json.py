@@ -325,6 +325,7 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
             "sub1": row.get("sub1", ""),
             "sub2": row.get("sub2", ""),
             "sub3": row.get("sub3", ""),
+            "external_link": row.get("external_link", ""),
             "likes_total": to_int(like.get("likes_total")),
             "updated_at": like.get("updated_at", ""),
             "likes_last_1d": to_int(like.get("likes_last_1d")),
