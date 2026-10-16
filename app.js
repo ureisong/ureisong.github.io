@@ -45,6 +45,13 @@
   const DEFAULT_NOTICE_TEXT = CONFIG.NOTICE_TEXT || "다시보레이 채널 기준으로 작성된 데이터의 추천순, 날짜순, 검색/필터를 제공합니다.";
   const FOOTER_TEXT = CONFIG.FOOTER_TEXT || "";
   const YOUTUBE_LOADING_WORDS = ["불러오는", "소환하는", "읽어오는", "가져오는", "준비하는"];
+  const PAGE_LOADING_MESSAGES = [
+    "노래 목록을 불러오고 있어요…",
+    "추가된 노래들이 있는지 확인하고 있어요…",
+    "새로운 노래가 있을까나… [img:img/GIF_Popcat.gif]",
+    "잠시만요… 놓친 노래들이 있는지 확인하고 있어요！ [img:img/PNG_Nung.png]",
+    "모든 [img:img/PNG_Nung.png] 노래를 수집중입니다…"
+  ];
   const YOUTUBE_API_SRC = "https://www.youtube.com/iframe_api";
   const YOUTUBE_SLOW_FIRST_MESSAGE_MS = 8000;
   const YOUTUBE_SLOW_SECOND_MESSAGE_MS = 2000;
@@ -291,6 +298,11 @@
   let recommendMode = "random";
   let recommendVisibleCount = RECOMMEND_LIMITS.random;
   let randomPoolIds = [];
+  let randomRecommendGeneration = 0;
+  let randomRecommendMixSignature = "";
+  let randomRecommendMixIds = [];
+  let currentRandomRecommendProbability = 50;
+  let latestNoticeRandomRecommendProbability = null;
   let dateVisibleDateCount = 1;
   let preventDateAutoFill = false;
   let dateSortMode = "desc";
@@ -401,6 +413,11 @@
   let normalPlaybackCloseFadePending = false;
   let suppressPageLoadingForInitialShare = false;
   let pendingPageLoadingHide = false;
+  let selectedPageLoadingMessage = "";
+  let currentPageLoadingSubText = "";
+  let pageLoadingSubTextLayerIndex = 0;
+  let pageLoadingSubTextTransitionFrame = 0;
+  let pageLoadingSubTextTransitionTimer = null;
   let playlistImportPreviewState = null;
 
   document.addEventListener("DOMContentLoaded", init);
@@ -413,6 +430,8 @@
     let startupCachedPayload = null;
     if (!isLocalDevelopmentHost_()) {
       const startupSettingsPromise = loadSettingsRows(true);
+      const startupRandomRecommendProbabilityPromise = loadRandomRecommendProbabilityFromNoticeCsv_();
+      void startupRandomRecommendProbabilityPromise.then(applyLatestRandomRecommendProbability_);
       startupCachedPayload = readLocalJsonCache();
       const startupCachedSongs = startupCachedPayload && (Array.isArray(startupCachedPayload.data)
         ? startupCachedPayload.data
@@ -716,7 +735,7 @@
       button.addEventListener("click", () => {
         recommendMode = button.dataset.recommendMode;
         recommendVisibleCount = RECOMMEND_LIMITS[recommendMode] || 10;
-        if (recommendMode === "random") randomPoolIds = makeRandomUniqueLinkedPoolIds(filteredSongs);
+        if (recommendMode === "random") resetRandomRecommendPool_(filteredSongs);
 
         document.querySelectorAll("[data-recommend-mode]").forEach(btn => btn.classList.remove("active"));
         button.classList.add("active");
@@ -726,7 +745,7 @@
 
     els.recommendMoreButton.addEventListener("click", () => {
       if (recommendMode === "random") {
-        randomPoolIds = makeRandomUniqueLinkedPoolIds(filteredSongs);
+        resetRandomRecommendPool_(filteredSongs);
       } else {
         recommendVisibleCount += RECOMMEND_MORE_STEP;
       }
@@ -1016,6 +1035,10 @@
     }
 
     els.youtubeModal.addEventListener("click", event => {
+      if (event.target === els.youtubeModal && isYoutubeShareMutedNoticeActive_()) {
+        event.preventDefault();
+        return;
+      }
       if (playlistPlayback && playlistPlayback.finished) {
         closeYoutubeModal();
         return;
@@ -1374,6 +1397,7 @@
             searchAliasesLoadedFromData = true;
           }
           currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
+          currentRandomRecommendProbability = resolveRandomRecommendProbability_(cached.randomRecommendProbability);
           currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
           coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(cached.covers || []), coverItems);
           recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
@@ -1405,6 +1429,7 @@
       allSongs = normalizeSongs(payload.data || payload || []);
       songbookSongs = normalizeSongbookSongs(payload.songbook || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
+      currentRandomRecommendProbability = resolveRandomRecommendProbability_(payload.randomRecommendProbability);
       currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
       applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
       coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(payload.covers || []), coverItems);
@@ -1424,6 +1449,7 @@
         data: allSongs,
         songbook: songbookSongs,
         notices: currentNoticeItems,
+        randomRecommendProbability: currentRandomRecommendProbability,
         footerText: currentFooterText,
         title: document.title,
         h1: els.pageTitle ? els.pageTitle.textContent : "",
@@ -1452,6 +1478,7 @@
         allSongs = normalizeSongs(cachedSongs);
         songbookSongs = normalizeSongbookSongs(cached.songbook || []);
         currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
+        currentRandomRecommendProbability = resolveRandomRecommendProbability_(cached.randomRecommendProbability);
         currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
         applyPageTitleValues(cached.title || cached.pageTitle || "", cached.h1 || cached.pageH1 || "", cached.h1Visible);
         coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(cached.covers || []), coverItems);
@@ -1563,6 +1590,7 @@
           data,
           songbook: songbookRows,
           notices: Array.isArray(json) ? [] : (json.notices || json.notice || ""),
+          randomRecommendProbability: Array.isArray(json) ? "" : (json.randomRecommendProbability || ""),
           covers: Array.isArray(json) ? [] : (json.covers || []),
           recs: Array.isArray(json) ? [] : (json.recs || json.recommendVideos || []),
           channels: Array.isArray(json) ? [] : (json.channels || []),
@@ -1616,6 +1644,7 @@
       const merged = mergeSongsAndLikes(songsRows, likesRows);
       if (!merged.length) throw new Error("CSV에 사용할 수 있는 곡 데이터가 없습니다.");
       const notices = extractNoticeItemsFromRows(noticeRows);
+      const randomRecommendProbability = extractRandomRecommendProbabilityFromRows_(noticeRows);
       const covers = extractCoverItemsFromRows(noticeRows);
       const recs = extractRecItemsFromRows(noticeRows);
       const channels = extractChannelItemsFromRows(noticeRows);
@@ -1626,6 +1655,7 @@
         data: merged,
         songbook: songbookRows,
         notices,
+        randomRecommendProbability,
         covers,
         recs,
         channels,
@@ -1931,7 +1961,7 @@
       dateVisibleDateCount = getDateInitialVisibleCount(dateSortMode);
       sungVisibleGroupCount = SUNG_INITIAL_GROUP_COUNT;
       if (shouldUpdatePanelState) applyFilterResultPanelState();
-      if (recommendMode === "random") randomPoolIds = [];
+      if (recommendMode === "random") clearRandomRecommendPool_();
     }
 
     const keyword = normalizeSearchText(els.searchInput.value);
@@ -2005,26 +2035,8 @@
 
   function getRecommendItems() {
     if (recommendMode === "random") {
-      if (!randomPoolIds.length) randomPoolIds = makeRandomUniqueLinkedPoolIds(filteredSongs);
-
-      const songMap = new Map(filteredSongs.map(song => [song.id, song]));
-      const items = [];
-      const usedKeys = new Set();
-
-      for (const id of randomPoolIds) {
-        const song = songMap.get(id);
-        if (!isRandomRecommendCandidate(song)) continue;
-
-        const key = normalizeSongArtistKey(song);
-        if (!key || usedKeys.has(key)) continue;
-
-        usedKeys.add(key);
-        items.push(song);
-
-        if (items.length >= getRandomRecommendLimit()) break;
-      }
-
-      return items;
+      if (!randomPoolIds.length) resetRandomRecommendPool_(filteredSongs);
+      return getRandomRecommendMixItems_(filteredSongs);
     }
 
     if (recommendMode === "my_liked") {
@@ -2034,6 +2046,122 @@
     return [...filteredSongs]
       .sort((a, b) => compareRecommend(a, b, recommendMode))
       .slice(0, recommendVisibleCount);
+  }
+
+
+  function resetRandomRecommendPool_(songs = filteredSongs) {
+    randomPoolIds = makeRandomUniqueLinkedPoolIds(songs);
+    randomRecommendGeneration += 1;
+    randomRecommendMixSignature = "";
+    randomRecommendMixIds = [];
+  }
+
+  function clearRandomRecommendPool_() {
+    randomPoolIds = [];
+    randomRecommendGeneration += 1;
+    randomRecommendMixSignature = "";
+    randomRecommendMixIds = [];
+  }
+
+  function getRandomRecommendMixItems_(songs) {
+    const signature = `${randomRecommendGeneration}::${currentRandomRecommendProbability}`;
+
+    if (signature !== randomRecommendMixSignature) {
+      const songMap = new Map((songs || []).map(song => [song.id, song]));
+      const baseItems = randomPoolIds
+        .map(id => songMap.get(id))
+        .filter(isRandomRecommendCandidate);
+      const targetCount = Math.min(getRandomRecommendLimit(), baseItems.length);
+      const picked = [];
+      const usedKeys = new Set();
+
+      for (const song of baseItems.slice(0, Math.max(0, targetCount - 1))) {
+        const key = normalizeSongArtistKey(song);
+        if (!key || usedKeys.has(key)) continue;
+        usedKeys.add(key);
+        picked.push(song);
+      }
+
+      if (targetCount > picked.length) {
+        let extraSong = null;
+        const useCorrectedRecommendation = Math.random() * 100 < currentRandomRecommendProbability;
+        if (useCorrectedRecommendation) {
+          const correctedCandidates = getRandomUniqueLinkedCandidates(
+            (songs || []).filter(song => isRandomRecommendCandidate(song) && toNumber(song.likes_total) > 0)
+          );
+          extraSong = correctedCandidates.find(song => {
+            const key = normalizeSongArtistKey(song);
+            return key && !usedKeys.has(key);
+          }) || null;
+        }
+
+        if (!extraSong) {
+          extraSong = baseItems.find(song => {
+            const key = normalizeSongArtistKey(song);
+            return key && !usedKeys.has(key);
+          }) || null;
+        }
+
+        if (extraSong) picked.push(extraSong);
+      }
+
+      randomRecommendMixIds = shuffleArray(picked).map(song => song.id);
+      randomRecommendMixSignature = signature;
+    }
+
+    const songMap = new Map((songs || []).map(song => [song.id, song]));
+    return randomRecommendMixIds.map(id => songMap.get(id)).filter(Boolean);
+  }
+
+  function normalizeRandomRecommendProbability_(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return 50;
+    const normalizedRuleValue = /%/.test(raw) ? raw : `${raw}%`;
+    const rule = parseNoticeProbabilityRule_({ text: "random_rec", link: normalizedRuleValue });
+    if (!rule || !rule.valid || rule.probabilities.length !== 1) return 50;
+    return Math.max(1, Math.min(100, Number(rule.probabilities[0]) || 50));
+  }
+
+  function extractRandomRecommendProbabilityFromRows_(rows) {
+    const row = (rows || []).find(item => String(item.key || "").trim().toLowerCase() === "random_rec");
+    return String(row && row.link || "").trim();
+  }
+
+  function resolveRandomRecommendProbability_(payloadValue) {
+    return latestNoticeRandomRecommendProbability === null
+      ? normalizeRandomRecommendProbability_(payloadValue)
+      : latestNoticeRandomRecommendProbability;
+  }
+
+  async function loadRandomRecommendProbabilityFromNoticeCsv_() {
+    if (!NOTICE_CSV_URL) return null;
+    try {
+      const url = new URL(NOTICE_CSV_URL, window.location.href);
+      url.searchParams.set("_ts", String(Date.now()));
+      const response = await fetch(url.toString(), { cache: "no-store" });
+      if (!response.ok) throw new Error(`notice CSV 응답 오류: ${response.status}`);
+      const rows = parseCsv(await response.text());
+      return normalizeRandomRecommendProbability_(extractRandomRecommendProbabilityFromRows_(rows));
+    } catch (err) {
+      console.warn("[random_rec 확률 확인 실패]", err);
+      return null;
+    }
+  }
+
+  function applyLatestRandomRecommendProbability_(probability) {
+    if (probability === null || probability === undefined || !Number.isFinite(Number(probability))) return;
+    latestNoticeRandomRecommendProbability = normalizeRandomRecommendProbability_(probability);
+    const changed = currentRandomRecommendProbability !== latestNoticeRandomRecommendProbability;
+    currentRandomRecommendProbability = latestNoticeRandomRecommendProbability;
+    randomRecommendMixSignature = "";
+    randomRecommendMixIds = [];
+
+    const cached = readLocalJsonCache();
+    if (cached && !Array.isArray(cached) && Array.isArray(cached.data)) {
+      cached.randomRecommendProbability = currentRandomRecommendProbability;
+      writeLocalJsonCache(cached);
+    }
+    if (changed && allSongs.length && recommendMode === "random") renderRecommendSection();
   }
 
   function getMyLikedRecommendItems(songs) {
@@ -3290,7 +3418,7 @@
   function applyEscResultPanelState() {
     recommendMode = "random";
     recommendVisibleCount = RECOMMEND_LIMITS.random;
-    randomPoolIds = [];
+    clearRandomRecommendPool_();
     dateSortMode = "desc";
     dateVisibleDateCount = 1;
     preventDateAutoFill = true;
@@ -3856,6 +3984,7 @@
 
     allSongs = normalizeSongs(payload.data || payload || []);
     currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
+    currentRandomRecommendProbability = resolveRandomRecommendProbability_(payload.randomRecommendProbability);
     currentFooterText = normalizeFooterText(payload.footerText || payload.footer || FOOTER_TEXT);
     applyPageTitleValues(payload.title || payload.pageTitle || "", payload.h1 || payload.pageH1 || "", payload.h1Visible);
     coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(payload.covers || []), coverItems);
@@ -4995,9 +5124,16 @@
     startNormalPlaybackMonitor_(state.token);
   }
 
+  function isYoutubeShareMutedNoticeActive_() {
+    const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
+    return Boolean(notice && !notice.hidden && youtubeShareAutoplayActive && normalPlaybackFadeState &&
+      normalPlaybackFadeState.phase === "share-muted");
+  }
+
   function dismissYoutubeShareMutedNoticeOutside_(event) {
     const notice = els.youtubeFrameWrap && els.youtubeFrameWrap.querySelector(".youtube-share-muted-notice");
     if (!notice || notice.hidden || notice.contains(event.target)) return;
+    if (event.target === els.youtubeModal && isYoutubeShareMutedNoticeActive_()) return;
     dismissYoutubeShareMutedNotice_();
   }
 
@@ -10459,9 +10595,85 @@
   function showPageLoading(message, sub="") {
     if (!els.pageLoading || suppressPageLoadingForInitialShare) return;
     if (els.pageLoadingText) els.pageLoadingText.textContent = message || "로딩 중...";
-    if (els.pageLoadingSubText) els.pageLoadingSubText.textContent = sub || "";
+    const initialSongId = getInitialSongIdQuery_();
+    let resolvedSubText = String(sub || "").trim();
+    if (initialSongId) {
+      resolvedSubText = "요청한 곡을 불러오고 있어요…";
+      selectedPageLoadingMessage = "";
+    } else if (isGenericPageLoadingMessage_(resolvedSubText)) {
+      if (!selectedPageLoadingMessage) {
+        selectedPageLoadingMessage = PAGE_LOADING_MESSAGES[Math.floor(Math.random() * PAGE_LOADING_MESSAGES.length)] || PAGE_LOADING_MESSAGES[0];
+      }
+      resolvedSubText = selectedPageLoadingMessage;
+    }
+    setPageLoadingSubText_(resolvedSubText);
     els.pageLoading.hidden = false;
     document.body.classList.add("page-loading-open");
+  }
+
+  function isGenericPageLoadingMessage_(message) {
+    const normalized = String(message || "").trim();
+    return !normalized || /^(?:노래 목록을 불러오고 있어요\.\.\.|노래 목록을 불러오고 있어요…|최신 노래 목록을 확인하고 있어요\.\.\.)$/.test(normalized);
+  }
+
+  function ensurePageLoadingSubTextLayers_() {
+    const container = els.pageLoadingSubText;
+    if (!container) return [];
+    const currentLayers = Array.from(container.querySelectorAll(".loader-subtext-layer"));
+    if (currentLayers.length === 2) return currentLayers;
+
+    const initialText = String(container.textContent || "").trim();
+    container.innerHTML = '<span class="loader-subtext-layer is-active"></span><span class="loader-subtext-layer" aria-hidden="true"></span>';
+    const layers = Array.from(container.querySelectorAll(".loader-subtext-layer"));
+    layers[0].innerHTML = formatNoticeTextHtml(initialText);
+    layers[0].dataset.loadingMessage = initialText;
+    pageLoadingSubTextLayerIndex = 0;
+    currentPageLoadingSubText = initialText;
+    return layers;
+  }
+
+  function setPageLoadingSubText_(message) {
+    const container = els.pageLoadingSubText;
+    if (!container) return;
+    const text = String(message || "").trim();
+    const layers = ensurePageLoadingSubTextLayers_();
+    if (layers.length !== 2 || text === currentPageLoadingSubText) return;
+
+    if (pageLoadingSubTextTransitionFrame) {
+      window.cancelAnimationFrame(pageLoadingSubTextTransitionFrame);
+      pageLoadingSubTextTransitionFrame = 0;
+    }
+    if (pageLoadingSubTextTransitionTimer) {
+      window.clearTimeout(pageLoadingSubTextTransitionTimer);
+      pageLoadingSubTextTransitionTimer = null;
+    }
+
+    const outgoingIndex = pageLoadingSubTextLayerIndex;
+    const incomingIndex = outgoingIndex === 0 ? 1 : 0;
+    const outgoing = layers[outgoingIndex];
+    const incoming = layers[incomingIndex];
+    layers.forEach((layer, index) => {
+      if (index !== outgoingIndex) layer.classList.remove("is-active");
+    });
+    outgoing.classList.add("is-active");
+    incoming.innerHTML = formatNoticeTextHtml(text);
+    incoming.dataset.loadingMessage = text;
+    incoming.setAttribute("aria-hidden", "false");
+    outgoing.setAttribute("aria-hidden", "true");
+    void incoming.offsetWidth;
+
+    pageLoadingSubTextLayerIndex = incomingIndex;
+    currentPageLoadingSubText = text;
+    pageLoadingSubTextTransitionFrame = window.requestAnimationFrame(() => {
+      pageLoadingSubTextTransitionFrame = 0;
+      outgoing.classList.remove("is-active");
+      incoming.classList.add("is-active");
+      pageLoadingSubTextTransitionTimer = window.setTimeout(() => {
+        outgoing.innerHTML = "";
+        outgoing.removeAttribute("data-loading-message");
+        pageLoadingSubTextTransitionTimer = null;
+      }, 280);
+    });
   }
 
   function hidePageLoading() {
@@ -10487,6 +10699,7 @@
     pendingPageLoadingHide = false;
     els.pageLoading.hidden = true;
     document.body.classList.remove("page-loading-open");
+    selectedPageLoadingMessage = "";
   }
 
   function showYoutubeLoading(message = "") {

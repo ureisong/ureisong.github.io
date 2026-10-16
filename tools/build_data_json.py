@@ -338,6 +338,8 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
     h1_visible = str((h1_row or {}).get("link", "")).strip().upper() == "TRUE"
     notices = [{"text": str(row.get("value", "")).strip(), "link": str(row.get("link", "")).strip()}
                for row in notice_rows if str(row.get("key", "")).strip().lower() == "notice" and str(row.get("value", "")).strip()]
+    random_rec_row = next((row for row in notice_rows if str(row.get("key", "")).strip().lower() == "random_rec"), {})
+    random_recommend_probability = str(random_rec_row.get("link", "")).strip()
     cover_rows = [row for row in notice_rows if str(row.get("key", "")).strip().lower() == "cover" and str(row.get("value", "")).strip()]
     covers = [{"id": f"COVER_{index:05d}", "url": str(row.get("value", "")).strip(),
                "section": "오리지널 곡" if str(row.get("link", "")).strip().upper() == "TRUE" else "커버곡",
@@ -356,6 +358,7 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
         "data": data,
         "songbook": cleaned_songbook,
         "notices": notices,
+        "randomRecommendProbability": random_recommend_probability,
         "covers": covers,
         "recs": recs,
         "channels": channels,
