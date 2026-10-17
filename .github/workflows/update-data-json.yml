@@ -14,6 +14,15 @@ on:
       - "search_aliases.js"
       - "manifest.webmanifest"
       - "404.html"
+      - "public/app.js"
+      - "public/config.js"
+      - "public/index.html"
+      - "public/style.css"
+      - "public/search_aliases.js"
+      - "public/manifest.webmanifest"
+      - "public/404.html"
+      - "data.json"
+      - "public/data.json"
       - "tools/build_data_json.py"
       - ".github/workflows/update-data-json.yml"
 
@@ -39,15 +48,22 @@ jobs:
       - name: Prepare build files
         run: |
           mkdir -p public
-          cp app.js config.js index.html style.css search_aliases.js manifest.webmanifest public/
-          cp data.json public/data.json
-          if [ -f 404.html ]; then
-            cp 404.html public/404.html
+          for file in app.js config.js index.html style.css search_aliases.js manifest.webmanifest 404.html; do
+            if [ -f "$file" ]; then
+              cp "$file" public/
+            fi
+          done
+          if [ -f data.json ]; then
+            cp data.json public/data.json
           fi
+          test -f public/app.js
+          test -f public/config.js
+          test -f public/index.html
+          test -f public/data.json
 
       - name: Check syntax
         run: |
-          node --check app.js
+          node --check public/app.js
           python -m py_compile tools/build_data_json.py
           if [ -f apps_script/Code.gs ]; then
             cp apps_script/Code.gs /tmp/Code.js
@@ -98,4 +114,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "Update song data and share pages"
-          file_pattern: data.json share
+          file_pattern: "data.json share public/data.json public/share"
