@@ -375,6 +375,8 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
 
     return {
         "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
+        "dataVersion": settings.get("version_songs", ""),
+        "searchAliasesVersion": settings.get("version_search_aliases", ""),
         "data": data,
         "songbook": cleaned_songbook,
         "notices": notices,

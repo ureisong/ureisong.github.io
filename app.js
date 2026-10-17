@@ -28,6 +28,8 @@
   const NOTICE_SPEED_PX_PER_SECOND = Math.max(1, Number(CONFIG.NOTICE_SPEED_PX_PER_SECOND || 30));
   const CSV_CACHE_PREFIX = "csv_cache_";
   const SONGS_CSV_CACHE_NAME = "songs_csv_cache";
+  const SEARCH_ALIASES_CSV_CACHE_NAME = "search_aliases_v3";
+  const SEARCH_ALIASES_CACHE_SCHEMA_VERSION = 1;
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
   const LOCAL_DATA_CACHE_SCHEMA_VERSION = 2;
   const SETTINGS_VERSION_SONGS = "version_songs";
@@ -429,34 +431,32 @@
 
   async function init() {
     const initialSongId = getInitialSongIdQuery_();
+    const isLocalDevelopment = isLocalDevelopmentHost_();
     showPageLoading("...LOADING...", initialSongId ? "요청한 곡을 불러오고 있어요..." : "노래 목록을 불러오고 있어요...");
 
-    let startupCacheWarmPromise = null;
-    let startupCachedPayload = null;
-    if (!isLocalDevelopmentHost_()) {
-      const startupSettingsPromise = loadSettingsRows(true);
-      const startupRandomRecommendProbabilityPromise = loadRandomRecommendProbabilityFromNoticeCsv_();
-      void startupRandomRecommendProbabilityPromise.then(applyLatestRandomRecommendProbability_);
-      startupCachedPayload = readLocalJsonCache();
-      const startupCachedSongs = startupCachedPayload && (Array.isArray(startupCachedPayload.data)
-        ? startupCachedPayload.data
-        : Array.isArray(startupCachedPayload) ? startupCachedPayload : []);
-      if (Array.isArray(startupCachedSongs) && startupCachedSongs.length > 0) {
-        startupCacheWarmPromise = loadData(false, null, { keepPageLoading: true, deferSearchAliases: true, deferStartupRender: true });
-      } else {
-        startDataJsonPrefetch_();
-      }
-
-      const startupSettingsRows = await startupSettingsPromise;
-      currentSettingsRows = startupSettingsRows;
-      if (shouldShowMaintenanceScreenForEntry_(startupSettingsRows, initialSongId)) {
-        if (startupCacheWarmPromise) await startupCacheWarmPromise;
-        renderMaintenanceScreen_();
+    let startupDataReady = false;
+    let pendingLiveNoticeRows = null;
+    const startupSettingsPromise = loadSettingsRows(true);
+    const startupNoticePromise = loadNoticeRowsFresh_();
+    void startupNoticePromise.then(liveNoticeRows => {
+      if (!Array.isArray(liveNoticeRows)) return;
+      if (!startupDataReady) {
+        pendingLiveNoticeRows = liveNoticeRows;
         return;
       }
+      applyLiveNoticeRows_(liveNoticeRows);
+      buildFilters(allSongs, songbookSongs);
+      applyAndRender(true);
+    });
+    if (!isLocalDevelopment) startDataJsonPrefetch_();
+    const initialCachedPayload = readLocalJsonCache();
+
+    currentSettingsRows = await startupSettingsPromise;
+    if (shouldShowMaintenanceScreenForEntry_(currentSettingsRows, initialSongId)) {
+      renderMaintenanceScreen_();
+      return;
     }
 
-    const initialCachedPayload = initialSongId ? readLocalJsonCache() : null;
     const canTryInitialCache = Boolean(initialSongId && initialCachedPayload);
 
     bindEvents();
@@ -466,7 +466,9 @@
     setupPlaylistSummaryResizeWatcher_();
     setupFavicon();
 
-    const openedInitialFromCache = canTryInitialCache ? tryOpenInitialSongFromLocalCache_(initialSongId, initialCachedPayload) : false;
+    const openedInitialFromCache = canTryInitialCache
+      ? tryOpenInitialSongFromLocalCache_(initialSongId, initialCachedPayload)
+      : false;
     suppressPageLoadingForInitialShare = openedInitialFromCache;
 
     if (!openedInitialFromCache && initialSongId) {
@@ -481,38 +483,41 @@
     startChannelAutoTimer();
     bindResponsiveRender();
 
-    let startupDataLoadedFromWarmCache = false;
-    if (startupCacheWarmPromise) {
-      await startupCacheWarmPromise;
-      if (isPayloadSongsVersionCurrentForSettings_(startupCachedPayload, currentSettingsRows)) {
-        startupDataLoadedFromWarmCache = true;
-        const requiredAliasesVersion = getSettingValue(currentSettingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
-        const cachedAliasesObject = startupCachedPayload.searchAliases && typeof startupCachedPayload.searchAliases === "object"
-          ? startupCachedPayload.searchAliases
-          : null;
-        const cachedAliasesVersion = getPayloadSearchAliasesVersion_(startupCachedPayload);
-        const cachedAliasesAreCurrent = !SEARCH_ALIASES_CSV_URL || !requiredAliasesVersion ||
-          Boolean(cachedAliasesObject && cachedAliasesVersion &&
-            compareVersionText(cachedAliasesVersion, requiredAliasesVersion) >= 0);
-        if (!cachedAliasesAreCurrent) searchAliasesLoadedFromData = false;
+    await loadData(false, currentSettingsRows, { keepPageLoading: true, deferSearchAliases: true });
+
+    let latestDataJsonPayload = null;
+    if (!isLocalDevelopment && startupDataJsonPromise) {
+      try {
+        latestDataJsonPayload = await startupDataJsonPromise;
+      } catch (err) {
+        debugLog("[data.json 검색어 설정 확인 실패]", err);
       }
     }
 
-    if (!startupDataLoadedFromWarmCache) {
-      renderNotice([{ text: DEFAULT_NOTICE_TEXT, link: "" }]);
-      renderFooter();
-      await loadData(false, currentSettingsRows);
-    } else {
-      renderStartupCachedPayload_(startupCachedPayload);
+    const aliasesAppliedFromDataJson = !isLocalDevelopment && applySearchAliasesFromDataJson_(latestDataJsonPayload);
+    if (!aliasesAppliedFromDataJson) {
+      searchAliasesLoadedFromData = false;
+      const cached = !isLocalDevelopment ? readLocalJsonCache() : null;
+      const cachedAliasesAreUsable = Boolean(cached && cached.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION &&
+        cached.searchAliases && typeof cached.searchAliases === "object" && getPayloadSearchAliasesVersion_(cached));
+      if (!latestDataJsonPayload && cachedAliasesAreUsable) {
+        searchAliases = normalizeSearchAliasesObject(cached.searchAliases);
+        activeSearchAliasesVersion = getPayloadSearchAliasesVersion_(cached);
+        searchAliasesLoadedFromData = true;
+      } else {
+        await loadSearchAliases(!isLocalDevelopment, currentSettingsRows);
+      }
     }
-    if (!searchAliasesLoadedFromData) {
-      const rows = currentSettingsRows.length ? currentSettingsRows : await loadSettingsRows();
-      currentSettingsRows = rows;
-      await loadSearchAliases(false, rows);
-      buildFilters(allSongs, songbookSongs);
-      applyAndRender(true);
+
+    if (Array.isArray(pendingLiveNoticeRows)) {
+      applyLiveNoticeRows_(pendingLiveNoticeRows);
+      pendingLiveNoticeRows = null;
     }
-    if (startupDataLoadedFromWarmCache) hidePageLoading();
+    startupDataReady = true;
+
+    buildFilters(allSongs, songbookSongs);
+    applyAndRender(true);
+    hidePageLoading();
     suppressPageLoadingForInitialShare = false;
     if (!openedInitialFromCache) handleInitialSongIdQuery_();
   }
@@ -1144,22 +1149,38 @@
 
   async function loadSearchAliases(forceNetwork = false, settingsRows = null) {
     const fallback = window.SEARCH_ALIASES || {};
+    let version = "";
 
     if (!SEARCH_ALIASES_CSV_URL) {
       searchAliases = normalizeSearchAliasesObject(fallback);
+      activeSearchAliasesVersion = "";
       searchAliasesLoadedFromData = true;
+      saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
       return;
     }
 
     try {
       const rows = settingsRows || currentSettingsRows || await loadSettingsRows();
-      const version = getSettingValue(rows, SETTINGS_VERSION_SEARCH_ALIASES);
+      version = getSettingValue(rows, SETTINGS_VERSION_SEARCH_ALIASES);
       const aliasRows = await loadVersionedCsvRows({
-        cacheName: "search_aliases",
+        cacheName: SEARCH_ALIASES_CSV_CACHE_NAME,
         url: SEARCH_ALIASES_CSV_URL,
         version,
         forceNetwork
       });
+
+      const localCacheBeforeAliasRefresh = readLocalJsonCache();
+      const localAliasVersionBeforeRefresh = localCacheBeforeAliasRefresh &&
+        localCacheBeforeAliasRefresh.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION
+        ? getPayloadSearchAliasesVersion_(localCacheBeforeAliasRefresh)
+        : "";
+      if (forceNetwork && version && localAliasVersionBeforeRefresh &&
+          compareVersionText(version, localAliasVersionBeforeRefresh) < 0) {
+        searchAliases = normalizeSearchAliasesObject(localCacheBeforeAliasRefresh.searchAliases || {});
+        activeSearchAliasesVersion = localAliasVersionBeforeRefresh;
+        searchAliasesLoadedFromData = true;
+        return;
+      }
 
       searchAliases = normalizeSearchAliasesRows(aliasRows);
       activeSearchAliasesVersion = version || "";
@@ -1167,11 +1188,30 @@
       saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
     } catch (err) {
       console.warn("[search_aliases 로딩 실패]", err);
-      const cached = readVersionedCsvCache("search_aliases");
-      searchAliases = cached ? normalizeSearchAliasesRows(cached.rows || []) : normalizeSearchAliasesObject(fallback);
-      activeSearchAliasesVersion = cached ? String(cached.version || "") : "";
-      searchAliasesLoadedFromData = true;
-      saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
+      const csvCached = readVersionedCsvCache(SEARCH_ALIASES_CSV_CACHE_NAME);
+      const localCached = readLocalJsonCache();
+      const csvCachedVersion = String(csvCached && csvCached.version || "").trim();
+      const localCachedVersion = getPayloadSearchAliasesVersion_(localCached);
+      const localCachedAliasesUsable = Boolean(localCached &&
+        localCached.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION &&
+        localCached.searchAliases && typeof localCached.searchAliases === "object" && localCachedVersion &&
+        (!version || compareVersionText(localCachedVersion, version) >= 0));
+      const csvCachedIsCurrent = Boolean(csvCached && Array.isArray(csvCached.rows) &&
+        (!version || (csvCachedVersion && compareVersionText(csvCachedVersion, version) >= 0)));
+      if (localCachedAliasesUsable) {
+        searchAliases = normalizeSearchAliasesObject(localCached.searchAliases);
+        activeSearchAliasesVersion = localCachedVersion;
+        searchAliasesLoadedFromData = true;
+      } else if (csvCachedIsCurrent) {
+        searchAliases = normalizeSearchAliasesRows(csvCached.rows || []);
+        activeSearchAliasesVersion = csvCachedVersion;
+        searchAliasesLoadedFromData = true;
+        saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
+      } else {
+        searchAliases = normalizeSearchAliasesObject(fallback);
+        activeSearchAliasesVersion = "";
+        searchAliasesLoadedFromData = true;
+      }
     }
   }
 
@@ -1286,14 +1326,13 @@
   async function loadVersionedCsvRows({ cacheName, url, version, forceNetwork = false, parser = parseCsv }) {
     const normalizedVersion = String(version || "").trim();
     const cached = readVersionedCsvCache(cacheName);
+    const cachedVersion = String(cached && cached.version || "").trim();
 
-    if (!forceNetwork && normalizedVersion && cached && cached.version && compareVersionText(cached.version, normalizedVersion) >= 0) {
-      return cached.rows || [];
+    if (!forceNetwork && normalizedVersion && cached && cachedVersion === normalizedVersion && Array.isArray(cached.rows)) {
+      return cached.rows;
     }
 
-    const cachedVersionIsOlder = Boolean(normalizedVersion) &&
-      (!cached || !String(cached.version || "").trim() || compareVersionText(cached.version, normalizedVersion) < 0);
-    const shouldFetchFresh = forceNetwork || cachedVersionIsOlder;
+    const shouldFetchFresh = forceNetwork || !normalizedVersion || !cached || cachedVersion !== normalizedVersion;
     const text = await fetchText(url, shouldFetchFresh);
     const rows = parser(text);
     writeVersionedCsvCache(cacheName, rows, normalizedVersion);
@@ -1340,22 +1379,94 @@
       (payload.settings && payload.settings[SETTINGS_VERSION_SEARCH_ALIASES]) || "").trim();
   }
 
+  function hasEmbeddedSearchAliases_(payload) {
+    return Boolean(payload && typeof payload === "object" && !Array.isArray(payload) &&
+      Object.prototype.hasOwnProperty.call(payload, "searchAliases") &&
+      payload.searchAliases && typeof payload.searchAliases === "object" && !Array.isArray(payload.searchAliases));
+  }
+
+  function getSongsRowsFromPayload_(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (!payload || typeof payload !== "object") return [];
+    return Array.isArray(payload.data) ? payload.data : [];
+  }
+
+  function hasUsableVersionedSongsPayload_(payload) {
+    const rows = getSongsRowsFromPayload_(payload);
+    return Boolean(rows.length && getPayloadDataVersion_(payload) &&
+      rows.every(row => row && String(row.id || "").trim()));
+  }
+
+  function resolvePublicDataSourcePlan_(cachedPayload, dataJsonPayload, options = {}) {
+    const forceNetwork = options.forceNetwork === true;
+    const fetchFailed = options.fetchFailed === true;
+    const cacheUsable = hasUsableVersionedSongsPayload_(cachedPayload);
+    const jsonUsable = hasUsableVersionedSongsPayload_(dataJsonPayload);
+
+    if (!jsonUsable) {
+      if (fetchFailed && cacheUsable && !forceNetwork) return "cache";
+      return "csv";
+    }
+    if (!cacheUsable) return "data-json";
+
+    const jsonVersion = getPayloadDataVersion_(dataJsonPayload);
+    const cachedVersion = getPayloadDataVersion_(cachedPayload);
+    const comparison = compareVersionText(jsonVersion, cachedVersion);
+    if (comparison > 0 || (forceNetwork && comparison >= 0)) return "data-json";
+    if (comparison === 0) return "cache";
+    return "csv";
+  }
+
+  function applySearchAliasesFromDataJson_(payload) {
+    if (isLocalDevelopmentHost_() || !hasEmbeddedSearchAliases_(payload)) return false;
+    const jsonVersion = getPayloadSearchAliasesVersion_(payload);
+    if (!jsonVersion) return false;
+
+    const cached = readLocalJsonCache();
+    const cachedAliasesUsable = Boolean(cached &&
+      cached.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION &&
+      cached.searchAliases && typeof cached.searchAliases === "object" && getPayloadSearchAliasesVersion_(cached));
+    const cachedVersion = cachedAliasesUsable ? getPayloadSearchAliasesVersion_(cached) : "";
+    if (cachedAliasesUsable) {
+      const comparison = compareVersionText(jsonVersion, cachedVersion);
+      if (comparison < 0) return false;
+      if (comparison === 0) {
+        searchAliases = normalizeSearchAliasesObject(cached.searchAliases);
+        activeSearchAliasesVersion = cachedVersion;
+        searchAliasesLoadedFromData = true;
+        return true;
+      }
+    }
+
+    searchAliases = normalizeSearchAliasesObject(payload.searchAliases);
+    activeSearchAliasesVersion = jsonVersion;
+    searchAliasesLoadedFromData = true;
+    saveSearchAliasesToLocalDataCache_(searchAliases, activeSearchAliasesVersion);
+    return true;
+  }
+
   function isPayloadSongsVersionCurrentForSettings_(payload, settingsRows) {
     const requiredSongsVersion = getSettingValue(settingsRows, SETTINGS_VERSION_SONGS);
-    if (!requiredSongsVersion) return true;
     const payloadVersion = getPayloadDataVersion_(payload);
-    return Boolean(payloadVersion) && compareVersionText(payloadVersion, requiredSongsVersion) >= 0;
+    if (!requiredSongsVersion || !payloadVersion) return false;
+    return compareVersionText(payloadVersion, requiredSongsVersion) === 0 && hasUsableVersionedSongsPayload_(payload);
   }
 
   function isPayloadVersionCurrentForSettings_(payload, settingsRows) {
     if (!isPayloadSongsVersionCurrentForSettings_(payload, settingsRows)) return false;
+    if (!isLocalDevelopmentHost_() && hasEmbeddedSearchAliases_(payload)) return true;
 
     const requiredAliasesVersion = getSettingValue(settingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
-    if (requiredAliasesVersion && SEARCH_ALIASES_CSV_URL) {
-      const payloadAliasesVersion = getPayloadSearchAliasesVersion_(payload);
-      if (!payloadAliasesVersion || compareVersionText(payloadAliasesVersion, requiredAliasesVersion) < 0) return false;
-    }
-    return true;
+    if (!requiredAliasesVersion || !SEARCH_ALIASES_CSV_URL) return !SEARCH_ALIASES_CSV_URL;
+    const payloadAliasesVersion = getPayloadSearchAliasesVersion_(payload);
+    return Boolean(payloadAliasesVersion) && compareVersionText(payloadAliasesVersion, requiredAliasesVersion) === 0;
+  }
+
+  function getEffectiveRuntimeSettings_(storedSettings) {
+    const base = storedSettings && typeof storedSettings === "object" && !Array.isArray(storedSettings)
+      ? storedSettings
+      : {};
+    return { ...base, ...extractSettingsFromRows(currentSettingsRows) };
   }
 
   function saveSearchAliasesToLocalDataCache_(aliases, version) {
@@ -1363,15 +1474,48 @@
     if (!cached || !Array.isArray(cached.data)) return;
     cached.searchAliases = normalizeSearchAliasesObject(aliases);
     cached.searchAliasesVersion = String(version || "").trim();
+    cached.searchAliasesCacheSchemaVersion = SEARCH_ALIASES_CACHE_SCHEMA_VERSION;
     writeLocalJsonCache(cached);
   }
 
   async function loadData(forceNetwork = false, settingsRows = null, options = {}) {
-    const cachedAtStart = !forceNetwork ? readLocalJsonCache() : null;
-    const cachedSongsAtStart = cachedAtStart && (Array.isArray(cachedAtStart.data) ? cachedAtStart.data : Array.isArray(cachedAtStart) ? cachedAtStart : []);
-    const effectiveSettingsForCache = Array.isArray(settingsRows) && settingsRows.length ? settingsRows : currentSettingsRows;
-    const hasUsableLocalCache = Array.isArray(cachedSongsAtStart) && cachedSongsAtStart.length > 0 &&
-      isPayloadSongsVersionCurrentForSettings_(cachedAtStart, effectiveSettingsForCache);
+    const cachedAtStart = readLocalJsonCache();
+    const cachedSongsAtStart = getSongsRowsFromPayload_(cachedAtStart);
+    const localDevelopment = isLocalDevelopmentHost_();
+    if (!localDevelopment && cachedAtStart &&
+        cachedAtStart.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION &&
+        cachedAtStart.searchAliases && typeof cachedAtStart.searchAliases === "object") {
+      searchAliases = normalizeSearchAliasesObject(cachedAtStart.searchAliases);
+      activeSearchAliasesVersion = getPayloadSearchAliasesVersion_(cachedAtStart);
+      searchAliasesLoadedFromData = Boolean(activeSearchAliasesVersion);
+    } else if (!localDevelopment) {
+      searchAliases = {};
+      activeSearchAliasesVersion = "";
+      searchAliasesLoadedFromData = false;
+    }
+    let dataJsonPayload = null;
+    let dataJsonFetchFailed = false;
+    let dataSourcePlan = "csv";
+
+    if (localDevelopment) {
+      dataSourcePlan = !forceNetwork && cachedSongsAtStart.length &&
+        isPayloadSongsVersionCurrentForSettings_(cachedAtStart, settingsRows || currentSettingsRows)
+        ? "cache"
+        : "csv";
+    } else {
+      try {
+        dataJsonPayload = await fetchDataJsonPayload_(forceNetwork);
+      } catch (err) {
+        dataJsonFetchFailed = true;
+        debugLog("[data.json 버전 확인 실패]", err);
+      }
+      dataSourcePlan = resolvePublicDataSourcePlan_(cachedAtStart, dataJsonPayload, {
+        forceNetwork,
+        fetchFailed: dataJsonFetchFailed
+      });
+    }
+
+    const hasUsableLocalCache = Boolean(!forceNetwork && cachedAtStart && cachedSongsAtStart.length && dataSourcePlan === "cache");
     if (!hasUsableLocalCache) {
       showPageLoading(
         "...LOADING...",
@@ -1385,55 +1529,61 @@
     }
 
     try {
-      if (!forceNetwork) {
+      if (hasUsableLocalCache) {
         const cached = cachedAtStart;
-        if (cached && hasUsableLocalCache) {
-          activeSongsVersion = getPayloadDataVersion_(cached);
-          allSongs = normalizeSongs(cached.data || cached);
-          songbookSongs = normalizeSongbookSongs(cached.songbook || []);
-          const cachedAliasesObject = cached.searchAliases && typeof cached.searchAliases === "object"
-            ? cached.searchAliases
-            : null;
-          const requiredAliasesVersion = getSettingValue(effectiveSettingsForCache, SETTINGS_VERSION_SEARCH_ALIASES);
-          const cachedAliasesVersion = getPayloadSearchAliasesVersion_(cached);
-          const cachedAliasesAreCurrent = !SEARCH_ALIASES_CSV_URL || !requiredAliasesVersion ||
-            Boolean(cachedAliasesObject && cachedAliasesVersion &&
-              compareVersionText(cachedAliasesVersion, requiredAliasesVersion) >= 0);
-          if (cachedAliasesObject) searchAliases = normalizeSearchAliasesObject(cachedAliasesObject);
-          if (cachedAliasesAreCurrent && cachedAliasesObject) {
-            activeSearchAliasesVersion = cachedAliasesVersion;
-            searchAliasesLoadedFromData = true;
-          }
-          currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
-          currentRandomRecommendProbability = resolveRandomRecommendProbability_(cached.randomRecommendProbability);
-          currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
-          coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(cached.covers || []), coverItems);
-          recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
-          channelItems = normalizeChannelItems(cached.channels || []);
-          likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
-          playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
-          if (!(options && options.deferStartupRender)) {
-            renderStartupCachedPayload_(cached);
-          }
-          if (!searchAliasesLoadedFromData && !(options && options.deferSearchAliases)) {
-            await loadSearchAliases(false, effectiveSettingsForCache);
-            buildFilters(allSongs, songbookSongs);
-            applyAndRender(true);
-          }
-          if (!(options && options.deferStartupRender)) {
-            setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
-          }
-          return;
+        activeSongsVersion = getPayloadDataVersion_(cached);
+        allSongs = normalizeSongs(cached.data || cached);
+        songbookSongs = normalizeSongbookSongs(cached.songbook || []);
+        const cachedAliasesObject = !localDevelopment &&
+          cached.searchAliasesCacheSchemaVersion === SEARCH_ALIASES_CACHE_SCHEMA_VERSION &&
+          cached.searchAliases && typeof cached.searchAliases === "object"
+          ? cached.searchAliases
+          : null;
+        const cachedAliasesVersion = getPayloadSearchAliasesVersion_(cached);
+        if (cachedAliasesObject) {
+          searchAliases = normalizeSearchAliasesObject(cachedAliasesObject);
+          activeSearchAliasesVersion = cachedAliasesVersion;
+          searchAliasesLoadedFromData = Boolean(cachedAliasesVersion);
+        } else if (!localDevelopment) {
+          searchAliases = {};
+          activeSearchAliasesVersion = "";
+          searchAliasesLoadedFromData = false;
         }
+        currentNoticeItems = normalizeNoticeItems(cached.notices || cached.notice || DEFAULT_NOTICE_TEXT);
+        currentRandomRecommendProbability = resolveRandomRecommendProbability_(cached.randomRecommendProbability);
+        currentFooterText = normalizeFooterText(cached.footerText || cached.footer || FOOTER_TEXT);
+        coverItems = mergeCoverItemsWithKnownStoredData_(normalizeCoverItems(cached.covers || []), coverItems);
+        recItems = normalizeRecItems(cached.recs || cached.recommendVideos || []);
+        channelItems = normalizeChannelItems(cached.channels || []);
+        const runtimeSettings = getEffectiveRuntimeSettings_(cached.settings || null);
+        likePostEnabled = normalizeLikePostEnabled(runtimeSettings, true);
+        playlistEnabled = normalizePlaylistEnabled(runtimeSettings);
+        applyPlaylistEnabledState(playlistEnabled);
+
+        if (!(options && options.deferStartupRender)) renderStartupCachedPayload_(cached);
+        if (!searchAliasesLoadedFromData && !(options && options.deferSearchAliases)) {
+          await loadSearchAliases(false, settingsRows || currentSettingsRows);
+          buildFilters(allSongs, songbookSongs);
+          applyAndRender(true);
+        }
+        if (!(options && options.deferStartupRender)) {
+          setStatus(`${formatStatusDate(new Date(cached.saved_at || Date.now()))} · ${allSongs.length}`);
+        }
+        return;
       }
 
-      const payload = await fetchSongsPayload(forceNetwork, settingsRows);
-      activeSongsVersion = getPayloadDataVersion_(payload) || getSettingValue(settingsRows || currentSettingsRows, SETTINGS_VERSION_SONGS);
-      if (payload.searchAliases && typeof payload.searchAliases === "object") {
-        searchAliases = normalizeSearchAliasesObject(payload.searchAliases);
-        activeSearchAliasesVersion = getPayloadSearchAliasesVersion_(payload);
-        searchAliasesLoadedFromData = true;
+      let payload = await fetchSongsPayload(forceNetwork, settingsRows, {
+        dataJsonPayload,
+        forceCsv: localDevelopment || dataSourcePlan === "csv"
+      });
+      if (!localDevelopment && dataSourcePlan === "csv" && hasUsableVersionedSongsPayload_(cachedAtStart)) {
+        const fetchedVersion = getPayloadDataVersion_(payload);
+        const cachedVersion = getPayloadDataVersion_(cachedAtStart);
+        if (fetchedVersion && cachedVersion && compareVersionText(fetchedVersion, cachedVersion) < 0) {
+          payload = cachedAtStart;
+        }
       }
+      activeSongsVersion = getPayloadDataVersion_(payload) || getSettingValue(settingsRows || currentSettingsRows, SETTINGS_VERSION_SONGS);
       allSongs = normalizeSongs(payload.data || payload || []);
       songbookSongs = normalizeSongbookSongs(payload.songbook || []);
       currentNoticeItems = normalizeNoticeItems(payload.notices || payload.notice || DEFAULT_NOTICE_TEXT);
@@ -1445,8 +1595,9 @@
       channelItems = normalizeChannelItems(payload.channels || []);
       hydrateStoredCoverPlaylistEntries_();
       void resolvePendingStoredCoverPlaylistEntries_();
-      likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
-      playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
+      const runtimeSettings = getEffectiveRuntimeSettings_(payload.settings || null);
+      likePostEnabled = normalizeLikePostEnabled(runtimeSettings, true);
+      playlistEnabled = normalizePlaylistEnabled(runtimeSettings);
       applyPlaylistEnabledState(playlistEnabled);
       renderNotice(currentNoticeItems);
       renderFooter();
@@ -1466,7 +1617,8 @@
         recs: recItems,
         channels: channelItems,
         searchAliases,
-        searchAliasesVersion: getPayloadSearchAliasesVersion_(payload) || activeSearchAliasesVersion,
+        searchAliasesVersion: activeSearchAliasesVersion || "",
+        searchAliasesCacheSchemaVersion: searchAliasesLoadedFromData ? SEARCH_ALIASES_CACHE_SCHEMA_VERSION : 0,
         settings: { like_post_enabled: likePostEnabled, playlist_enabled: playlistEnabled ? "TRUE" : "FALSE" },
         dataVersion: activeSongsVersion,
         saved_at: Date.now()
@@ -1480,8 +1632,11 @@
       console.error("[데이터 로딩 실패]", err);
       const cached = readLocalJsonCache();
       const cachedSongs = cached && (Array.isArray(cached.data) ? cached.data : Array.isArray(cached) ? cached : []);
-      if (Array.isArray(cachedSongs) && cachedSongs.length &&
-          isPayloadSongsVersionCurrentForSettings_(cached, settingsRows || currentSettingsRows)) {
+      const cachedFallbackIsUsable = Array.isArray(cachedSongs) && cachedSongs.length &&
+        (isLocalDevelopmentHost_()
+          ? isPayloadSongsVersionCurrentForSettings_(cached, settingsRows || currentSettingsRows)
+          : Boolean(getPayloadDataVersion_(cached)));
+      if (cachedFallbackIsUsable) {
         activeSongsVersion = getPayloadDataVersion_(cached);
         allSongs = normalizeSongs(cachedSongs);
         songbookSongs = normalizeSongbookSongs(cached.songbook || []);
@@ -1494,8 +1649,9 @@
         channelItems = normalizeChannelItems(cached.channels || []);
         hydrateStoredCoverPlaylistEntries_();
         void resolvePendingStoredCoverPlaylistEntries_();
-        likePostEnabled = normalizeLikePostEnabled(cached.settings || null, true);
-        playlistEnabled = normalizePlaylistEnabled(cached.settings || null);
+        const runtimeSettings = getEffectiveRuntimeSettings_(cached.settings || null);
+        likePostEnabled = normalizeLikePostEnabled(runtimeSettings, true);
+        playlistEnabled = normalizePlaylistEnabled(runtimeSettings);
         applyPlaylistEnabledState(playlistEnabled);
         renderNotice(currentNoticeItems);
         renderFooter();
@@ -1538,61 +1694,56 @@
   }
 
   function startDataJsonPrefetch_() {
-    if (!DATA_URL || startupDataJsonPromise) return;
+    if (!DATA_URL || startupDataJsonPromise) return startupDataJsonPromise;
     startupDataJsonPromise = (async () => {
-      const response = await fetch(DATA_URL, { cache: "default" });
+      const response = await fetch(DATA_URL, { cache: "no-cache" });
       if (!response.ok) throw new Error(`data.json 응답 오류: ${response.status}`);
       return response.json();
     })();
     startupDataJsonPromise.catch(() => {});
+    return startupDataJsonPromise;
   }
 
-  async function fetchSongsPayload(forceNetwork, settingsRows = null) {
-    let jsonError = null;
+  async function fetchDataJsonPayload_(forceNetwork = false) {
+    if (!DATA_URL) throw new Error("data.json URL이 설정되지 않았습니다.");
+    if (!forceNetwork && startupDataJsonPromise) return await startupDataJsonPromise;
+    const response = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "no-cache" });
+    if (!response.ok) throw new Error(`data.json 응답 오류: ${response.status}`);
+    return await response.json();
+  }
 
-    if (DATA_URL) {
+  async function fetchSongsPayload(forceNetwork, settingsRows = null, options = {}) {
+    let jsonError = null;
+    const localDevelopment = isLocalDevelopmentHost_();
+    const forceCsv = options && options.forceCsv === true;
+
+    if (!localDevelopment && !forceCsv && DATA_URL) {
       try {
-        let json;
-        if (!forceNetwork && startupDataJsonPromise) {
-          const pendingJson = startupDataJsonPromise;
-          try {
-            json = await pendingJson;
-          } finally {
-            if (startupDataJsonPromise === pendingJson) startupDataJsonPromise = null;
-          }
-        } else {
-          const res = await fetch(DATA_URL, { cache: forceNetwork ? "reload" : "default" });
-          if (!res.ok) throw new Error(`data.json 응답 오류: ${res.status}`);
-          json = await res.json();
-        }
-        const data = Array.isArray(json) ? json : json && json.data;
+        const json = options && options.dataJsonPayload
+          ? options.dataJsonPayload
+          : await fetchDataJsonPayload_(forceNetwork);
+        const data = getSongsRowsFromPayload_(json);
         if (!Array.isArray(data) || data.length === 0) {
           throw new Error("data.json에 사용할 수 있는 곡 데이터가 없습니다.");
         }
         if (data.some(row => !row || !String(row.id || "").trim())) {
           throw new Error("data.json에 유효하지 않은 곡 데이터가 포함되어 있습니다.");
         }
-        const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
-          ? settingsRows
-          : (Array.isArray(currentSettingsRows) ? currentSettingsRows : []);
-        const requiredSongsVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS);
-        const jsonSongsVersion = String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SONGS]) || "").trim();
-        if (requiredSongsVersion && (!jsonSongsVersion || compareVersionText(jsonSongsVersion, requiredSongsVersion) < 0)) {
-          throw new Error(`data.json 버전(${jsonSongsVersion || "없음"})이 설정 시트 버전(${requiredSongsVersion})보다 낮습니다.`);
+        const jsonSongsVersion = getPayloadDataVersion_(json);
+        if (!jsonSongsVersion) {
+          throw new Error("data.json에 곡 데이터 버전이 없습니다.");
         }
-        const requiredAliasesVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SEARCH_ALIASES);
-        const jsonAliasesVersion = String((!Array.isArray(json) && json.settings && json.settings[SETTINGS_VERSION_SEARCH_ALIASES]) || "").trim();
-        const jsonAliasesAreCurrent = !requiredAliasesVersion || !SEARCH_ALIASES_CSV_URL ||
-          Boolean(jsonAliasesVersion) && compareVersionText(jsonAliasesVersion, requiredAliasesVersion) >= 0;
+
         let songbookRows = Array.isArray(json) ? [] : (Array.isArray(json.songbook) ? json.songbook : []);
         if (!songbookRows.length && SONGBOOK_CSV_URL) {
-          const songbookSettingsRows = effectiveSettingsRows.length
-            ? effectiveSettingsRows
-            : await loadSettingsRows();
-          currentSettingsRows = songbookSettingsRows;
-          const songbookVersion = getSettingValue(songbookSettingsRows, SETTINGS_VERSION_SONGS)
-            || jsonSongsVersion;
-          songbookRows = await loadSongbookCsvRows_(songbookVersion, forceNetwork);
+          const effectiveSettingsRows = (Array.isArray(settingsRows) && settingsRows.length)
+            ? settingsRows
+            : (Array.isArray(currentSettingsRows) && currentSettingsRows.length)
+              ? currentSettingsRows
+              : await loadSettingsRows();
+          currentSettingsRows = effectiveSettingsRows;
+          const songbookVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS) || jsonSongsVersion;
+          songbookRows = await loadSongbookCsvRows_(songbookVersion, true);
         }
         return {
           data,
@@ -1607,9 +1758,7 @@
           h1: Array.isArray(json) ? "" : (json.h1 || json.pageH1 || ""),
           h1Visible: Array.isArray(json) ? false : (json.h1Visible === true),
           settings: Array.isArray(json) ? null : (json.settings || null),
-          searchAliases: jsonAliasesAreCurrent && !Array.isArray(json) ? (json.searchAliases || null) : null,
-          searchAliasesVersion: jsonAliasesVersion,
-          dataVersion: jsonSongsVersion || requiredSongsVersion,
+          dataVersion: jsonSongsVersion,
           generated_at: Array.isArray(json) ? "" : (json.generated_at || "")
         };
       } catch (err) {
@@ -1626,51 +1775,28 @@
           : await loadSettingsRows();
       currentSettingsRows = effectiveSettingsRows;
       const songsVersion = getSettingValue(effectiveSettingsRows, SETTINGS_VERSION_SONGS);
+      const useFreshCsv = Boolean(forceNetwork || forceCsv || localDevelopment);
 
       const tasks = [
         loadVersionedCsvRows({
           cacheName: SONGS_CSV_CACHE_NAME,
           url: SONGS_CSV_URL,
           version: songsVersion,
-          forceNetwork
+          forceNetwork: useFreshCsv
         }),
-        fetchText(LIKES_SMR_CSV_URL, forceNetwork).then(parseCsv)
+        fetchText(LIKES_SMR_CSV_URL, useFreshCsv).then(parseCsv),
+        SONGBOOK_CSV_URL
+          ? loadSongbookCsvRows_(songsVersion, useFreshCsv)
+          : Promise.resolve([])
       ];
-      if (NOTICE_CSV_URL) {
-        tasks.push(fetchText(NOTICE_CSV_URL, forceNetwork).then(parseCsv).catch(err => {
-          console.warn("[notice CSV 로딩 실패]", err);
-          return [];
-        }));
-      } else {
-        tasks.push(Promise.resolve([]));
-      }
-      tasks.push(SONGBOOK_CSV_URL
-        ? loadSongbookCsvRows_(songsVersion, forceNetwork)
-        : Promise.resolve([]));
 
-      const [songsRows, likesRows, noticeRows = [], songbookRows = []] = await Promise.all(tasks);
+      const [songsRows, likesRows, songbookRows = []] = await Promise.all(tasks);
       const merged = mergeSongsAndLikes(songsRows, likesRows);
       if (!merged.length) throw new Error("CSV에 사용할 수 있는 곡 데이터가 없습니다.");
-      const notices = extractNoticeItemsFromRows(noticeRows);
-      const randomRecommendProbability = extractRandomRecommendProbabilityFromRows_(noticeRows);
-      const covers = extractCoverItemsFromRows(noticeRows);
-      const recs = extractRecItemsFromRows(noticeRows);
-      const channels = extractChannelItemsFromRows(noticeRows);
-      const footerText = extractFooterTextFromRows(noticeRows);
-      const pageMeta = extractPageMetaFromRows(noticeRows);
       const settings = extractSettingsFromRows(effectiveSettingsRows);
       return {
         data: merged,
         songbook: songbookRows,
-        notices,
-        randomRecommendProbability,
-        covers,
-        recs,
-        channels,
-        footerText,
-        title: pageMeta.title,
-        h1: pageMeta.h1,
-        h1Visible: pageMeta.h1Visible,
         settings,
         dataVersion: songsVersion
       };
@@ -1681,7 +1807,17 @@
   }
 
   async function fetchText(url, forceNetwork) {
-    const res = await fetch(url, { cache: forceNetwork ? "reload" : "default" });
+    let requestUrl = url;
+    if (forceNetwork) {
+      try {
+        const freshUrl = new URL(url, window.location.href);
+        freshUrl.searchParams.set("_ts", String(Date.now()));
+        requestUrl = freshUrl.toString();
+      } catch {
+        requestUrl = url;
+      }
+    }
+    const res = await fetch(requestUrl, { cache: forceNetwork ? "no-store" : "default" });
     if (!res.ok) throw new Error(`CSV 응답 오류: ${res.status}`);
     return await res.text();
   }
@@ -2160,7 +2296,7 @@
       : latestNoticeRandomRecommendProbability;
   }
 
-  async function loadRandomRecommendProbabilityFromNoticeCsv_() {
+  async function loadNoticeRowsFresh_() {
     if (!NOTICE_CSV_URL) return null;
     try {
       const url = new URL(NOTICE_CSV_URL, window.location.href);
@@ -2168,11 +2304,55 @@
       const response = await fetch(url.toString(), { cache: "no-store" });
       if (!response.ok) throw new Error(`notice CSV 응답 오류: ${response.status}`);
       const rows = parseCsv(await response.text());
-      return normalizeRandomRecommendProbability_(extractRandomRecommendProbabilityFromRows_(rows));
+      if (!rows.length) throw new Error("notice CSV가 비어 있습니다.");
+      return rows;
     } catch (err) {
-      console.warn("[random_rec 확률 확인 실패]", err);
+      console.warn("[notice CSV 로딩 실패]", err);
       return null;
     }
+  }
+
+  function applyLiveNoticeRows_(rows) {
+    if (!Array.isArray(rows)) return false;
+
+    currentNoticeItems = normalizeNoticeItems(extractNoticeItemsFromRows(rows));
+    const previousProbability = currentRandomRecommendProbability;
+    latestNoticeRandomRecommendProbability = normalizeRandomRecommendProbability_(extractRandomRecommendProbabilityFromRows_(rows));
+    currentRandomRecommendProbability = latestNoticeRandomRecommendProbability;
+    currentFooterText = normalizeFooterText(extractFooterTextFromRows(rows));
+
+    const pageMeta = extractPageMetaFromRows(rows);
+    applyPageTitleValues(pageMeta.title, pageMeta.h1, pageMeta.h1Visible);
+    const freshCovers = normalizeCoverItems(extractCoverItemsFromRows(rows));
+    coverItems = mergeCoverItemsWithKnownStoredData_(freshCovers, coverItems);
+    recItems = normalizeRecItems(extractRecItemsFromRows(rows));
+    channelItems = normalizeChannelItems(extractChannelItemsFromRows(rows));
+    randomRecommendMixSignature = "";
+    randomRecommendMixIds = [];
+
+    renderNotice(currentNoticeItems);
+    renderFooter();
+    renderCoverSection();
+    renderRecSection();
+    renderChannelSection();
+    if (previousProbability !== currentRandomRecommendProbability && recommendMode === "random") {
+      renderRecommendSection();
+    }
+
+    const cached = readLocalJsonCache();
+    if (cached && Array.isArray(cached.data)) {
+      cached.notices = currentNoticeItems;
+      cached.randomRecommendProbability = currentRandomRecommendProbability;
+      cached.footerText = currentFooterText;
+      cached.title = normalDocumentTitle || DEFAULT_DOCUMENT_TITLE;
+      cached.h1 = els.pageTitle ? els.pageTitle.textContent : "";
+      cached.h1Visible = Boolean(els.pageTitle && !els.pageTitle.hidden);
+      cached.covers = coverItems;
+      cached.recs = recItems;
+      cached.channels = channelItems;
+      writeLocalJsonCache(cached);
+    }
+    return true;
   }
 
   function applyLatestRandomRecommendProbability_(probability) {
@@ -4118,8 +4298,9 @@
     channelItems = normalizeChannelItems(payload.channels || []);
     hydrateStoredCoverPlaylistEntries_();
     void resolvePendingStoredCoverPlaylistEntries_();
-    likePostEnabled = normalizeLikePostEnabled(payload.settings || null, true);
-    playlistEnabled = normalizePlaylistEnabled(payload.settings || null);
+    const runtimeSettings = getEffectiveRuntimeSettings_(payload.settings || null);
+    likePostEnabled = normalizeLikePostEnabled(runtimeSettings, true);
+    playlistEnabled = normalizePlaylistEnabled(runtimeSettings);
     applyPlaylistEnabledState(playlistEnabled);
     renderPlaylistSummary();
     updatePlaylistOpenButtonLabel_();
