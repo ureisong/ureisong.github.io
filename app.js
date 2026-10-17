@@ -2943,7 +2943,7 @@
       return `
         <section class="date-group sung-group">
           <button class="date-group-title ${collapsed ? "collapsed" : ""}" type="button" data-date-group-toggle="${escapeHtml(key)}">
-            <span class="sung-group-label" data-sung-group-label="${escapeHtml(group.label)}" title="${escapeHtml(group.label)}"><span class="modal-marquee-inner">${escapeHtml(group.label)}</span></span>
+            <span class="sung-group-label" data-sung-group-label="${escapeHtml(group.label)}" title="${escapeHtml(group.label)}"><span class="modal-marquee-inner">${renderSungGroupLabelHtml_(group)}</span></span>
             <span class="date-group-count">${group.items.length}곡</span>
           </button>
           <div class="song-list compact ${collapsed ? "collapsed" : ""}" data-date-group-body="${escapeHtml(key)}">${collapsed ? "" : (group.songbookOnly ? '<div class="empty sung-no-broadcast">등록된 방송 데이터가 없습니다</div>' : group.items.map(renderSongCard).join(""))}</div>
@@ -2967,6 +2967,13 @@
     bindDateGroupToggles(els.sungList, "sung");
     bindSungMoreButton();
     scheduleSungGroupTitleMarquee_();
+  }
+
+  function renderSungGroupLabelHtml_(group) {
+    if (!group || !group.featureText || !group.titleText || !group.artistText) {
+      return escapeHtml(group && group.label || "");
+    }
+    return `${escapeHtml(group.titleText)}&thinsp;&nbsp;<sup>${escapeHtml(group.featureText)}</sup>&thinsp;&nbsp;- ${escapeHtml(group.artistText)}`;
   }
 
   function scheduleSungGroupTitleMarquee_() {
@@ -3045,6 +3052,7 @@
 
     [...songs].sort(compareDateDesc).forEach(song => {
       const titleText = getSungGroupTitleText_(song);
+      const featureText = getSongTitleFeatureText_(song);
       const artistValues = getArtistDisplayValues_(song);
 
       if (mode === "artist") {
@@ -3062,11 +3070,12 @@
       }
 
       const artistText = formatSungSongArtistText_(song.artist) || getRawDisplayArtist(song);
-      const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
-      const label = `${titleText} - ${artistText}`;
+      const groupTitleText = [titleText, featureText].filter(Boolean).join(" ");
+      const key = `song:${normalizeSearchText(groupTitleText)}:${normalizeSearchText(artistText)}`;
+      const label = `${groupTitleText} - ${artistText}`;
 
       if (!map.has(key)) {
-        map.set(key, { key, label, items: [], songbookOnly: false });
+        map.set(key, { key, label, titleText, featureText, artistText, items: [], songbookOnly: false });
       }
       map.get(key).items.push(song);
     });
@@ -3074,10 +3083,12 @@
     if (mode === "song") {
       (songbookItems || []).forEach(songbookItem => {
         const titleText = getCanonicalSungTitleText_(songbookItem.title) || "곡명 없음";
+        const featureText = getSongTitleFeatureText_(songbookItem);
         const artistText = formatSungSongArtistText_(songbookItem.artist) || String(songbookItem.artist || "").trim() || "아티스트 없음";
-        const key = `song:${normalizeSearchText(titleText)}:${normalizeSearchText(artistText)}`;
+        const groupTitleText = [titleText, featureText].filter(Boolean).join(" ");
+        const key = `song:${normalizeSearchText(groupTitleText)}:${normalizeSearchText(artistText)}`;
         if (!map.has(key)) {
-          map.set(key, { key, label: `${titleText} - ${artistText}`, items: [], songbookOnly: true });
+          map.set(key, { key, label: `${groupTitleText} - ${artistText}`, titleText, featureText, artistText, items: [], songbookOnly: true });
         }
       });
     }
@@ -3243,16 +3254,48 @@
   }
 
   function getCanonicalSungTitleText_(value) {
-    return stripTitleMarker_(String(value || "").split("ㅨ", 1)[0]).trim();
+    const parsed = parseSongTitleFeature_(value);
+    return stripTitleMarker_(String(parsed.title || "").split("ㅨ", 1)[0]).trim();
+  }
+
+  function getSongTitleFeatureText_(song) {
+    return [...new Set(getTitleValues(song)
+      .map(value => parseSongTitleFeature_(value).feature)
+      .map(value => String(value || "").trim())
+      .filter(Boolean))].join(" ");
+  }
+
+  function getSongTitleCardHtml_(song) {
+    return getTitleValues(song).map(value => {
+      const parsed = parseSongTitleFeature_(value);
+      const titleText = formatDisplaySongTitleText_(parsed.title || value);
+      const featureHtml = parsed.feature ? `<sup>&thinsp;&nbsp; ${escapeHtml(parsed.feature)}</sup>` : "";
+      return `${escapeHtml(titleText)}${featureHtml}`;
+    }).join(" ") || escapeHtml("곡명 없음");
+  }
+
+  function parseSongTitleFeature_(value) {
+    const text = String(value || "").trim();
+    const match = text.match(/\s*\(\s*(feat\.\s*[^()]*)\s*\)\s*$/iu);
+    if (!match) return { title: text, feature: "" };
+
+    return {
+      title: text.slice(0, match.index).trimEnd(),
+      feature: String(match[1] || "").replace(/\s+/g, " ").trim()
+    };
   }
 
   function getSearchableTitleValues_(song) {
     return getTitleValues(song)
-      .map(value => String(value || "")
-        .split("ㅨ", 1)[0]
-        .replace(/\bfeat\.\s*/gi, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim())
+      .map(value => {
+        const parsed = parseSongTitleFeature_(value);
+        const canonicalTitle = String(parsed.title || "").split("ㅨ", 1)[0];
+        const featuringArtist = String(parsed.feature || "").replace(/^feat\.\s*/iu, "").trim();
+        return [canonicalTitle, featuringArtist].filter(Boolean).join(" ")
+          .replace(/\bfeat\.\s*/gi, " ")
+          .replace(/\s{2,}/g, " ")
+          .trim();
+      })
       .filter(Boolean);
   }
 
@@ -4069,8 +4112,8 @@
     const titleTooltip = getSongTitleTooltip_(song);
     const titleAttr = titleTooltip ? ` title="${escapeHtml(titleTooltip)}"` : "";
     const titleCoreHtml = song.link
-      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-end="${escapeHtml(song.end || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${escapeHtml(titleText)}</button>`
-      : `<span class="song-title-missing" role="button" tabindex="0" data-unprocessed-song-title="1" aria-label="${escapeHtml(`${titleText} · 아직 처리되지 않은 곡`)}" title="${escapeHtml(titleTooltip || "아직 처리되지 않은 곡입니다")}">${escapeHtml(titleText)}</span>`;
+      ? `<button class="song-title-button" type="button" data-youtube-url="${escapeHtml(youtubeUrl)}" data-song-title="${escapeHtml(titleText)}" data-song-artist="${escapeHtml(modalArtistText)}" data-song-date="${escapeHtml(dateText)}" data-song-timeline="${escapeHtml(song.timeline || "")}" data-song-end="${escapeHtml(song.end || "")}" data-song-id="${escapeHtml(song.id)}"${titleAttr}>${getSongTitleCardHtml_(song)}</button>`
+      : `<span class="song-title-missing" role="button" tabindex="0" data-unprocessed-song-title="1" aria-label="${escapeHtml(`${titleText} · 아직 처리되지 않은 곡`)}" title="${escapeHtml(titleTooltip || "아직 처리되지 않은 곡입니다")}">${getSongTitleCardHtml_(song)}</span>`;
 
     const titleFilterButton = `<button class="inline-filter-button title-filter desktop-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
     const mobileTitleFilterButton = `<button class="inline-filter-button title-filter mobile-title-filter" type="button" title="이 곡명으로 검색" data-filter-type="search" data-filter-value="${escapeHtml(searchableTitleText)}">ⓕ</button>`;
