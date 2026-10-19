@@ -3325,20 +3325,49 @@
 
   function parseArtistExpression_(value) {
     const text = String(value || "").trim();
-    if (!text) return { valid: true, raw: text, artists: [], reason: "" };
+    if (!text) return { valid: true, raw: text, artists: [], popupOnlyArtists: [], reason: "" };
     const bracketError = getArtistBracketValidationError_(text);
-    if (bracketError) return { valid: false, raw: text, artists: [], reason: bracketError };
+    if (bracketError) return { valid: false, raw: text, artists: [], popupOnlyArtists: [], reason: bracketError };
+
+    const topLevelMarkers = getTopLevelArtistMarkerPositions_(text);
+    if (topLevelMarkers.length === 1) {
+      const markerIndex = topLevelMarkers[0];
+      const prefixText = text.slice(0, markerIndex).trim();
+      const suffix = text.slice(markerIndex + 1).trim();
+      const closeIndex = findArtistGroupClose_(suffix);
+      if (prefixText && suffix.startsWith("(") && closeIndex === suffix.length - 1) {
+        const content = suffix.slice(1, -1).trim();
+        const extension = content.match(/^&\s+(.+)$/u);
+        if (extension) {
+          const base = parseArtistExpression_(prefixText);
+          if (!base.valid || !base.artists.length) {
+            return { valid: false, raw: text, artists: [], popupOnlyArtists: [], reason: `팝업 전용 아티스트 앞의 기본 아티스트 형식 오류: ${base.reason || "기본 아티스트가 없습니다"}` };
+          }
+          const extra = parseArtistExpression_(extension[1].trim());
+          if (!extra.valid || !extra.artists.length) {
+            return { valid: false, raw: text, artists: [], popupOnlyArtists: [], reason: `팝업 전용 아티스트 목록 형식 오류: ${extra.reason || "추가 아티스트가 없습니다"}` };
+          }
+          return {
+            valid: true,
+            raw: text,
+            artists: base.artists,
+            popupOnlyArtists: [...(base.popupOnlyArtists || []), ...extra.artists, ...(extra.popupOnlyArtists || [])],
+            reason: ""
+          };
+        }
+      }
+    }
 
     const parts = splitTopLevelArtistValues_(text);
     if (!parts.length || parts.some(part => !part)) {
-      return { valid: false, raw: text, artists: [], reason: "아티스트 사이의 & 구분자가 잘못되었습니다" };
+      return { valid: false, raw: text, artists: [], popupOnlyArtists: [], reason: "아티스트 사이의 & 구분자가 잘못되었습니다" };
     }
     const artists = parts.map(part => parseArtistValue_(part));
     const invalid = artists.find(item => !item.valid);
     if (invalid) {
-      return { valid: false, raw: text, artists: [], reason: `'${invalid.raw}' 형식 오류: ${invalid.reason}` };
+      return { valid: false, raw: text, artists: [], popupOnlyArtists: [], reason: `'${invalid.raw}' 형식 오류: ${invalid.reason}` };
     }
-    return { valid: true, raw: text, artists, reason: "" };
+    return { valid: true, raw: text, artists, popupOnlyArtists: [], reason: "" };
   }
 
   function getArtistNodeDisplayText_(node) {
@@ -3411,7 +3440,9 @@
 
   function getArtistSearchValues_(song) {
     const parsed = parseArtistExpression_(song && song.artist || "");
-    return parsed.valid ? parsed.artists.flatMap(getArtistSearchValuesFromNode_).filter(Boolean) : [];
+    return parsed.valid
+      ? [...parsed.artists, ...(parsed.popupOnlyArtists || [])].flatMap(getArtistSearchValuesFromNode_).filter(Boolean)
+      : [];
   }
 
   function getArtistBadgeDescriptors_(song) {
@@ -3456,7 +3487,7 @@
   function getModalArtistChipDescriptors_(value) {
     const parsed = parseArtistExpression_(value);
     if (!parsed.valid) return [];
-    return parsed.artists.flatMap(getModalArtistChipDescriptorsForNode_);
+    return [...parsed.artists, ...(parsed.popupOnlyArtists || [])].flatMap(getModalArtistChipDescriptorsForNode_);
   }
 
   function logInvalidArtistSong_(item, reason) {

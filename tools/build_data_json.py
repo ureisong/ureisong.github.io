@@ -261,8 +261,21 @@ def _artist_identity_candidates_for_part(value: Any, depth: int = 0) -> List[str
 
 
 def _artist_identity_values(value: Any) -> List[str]:
+    text = str(value or "").strip()
+    positions = _top_level_artist_marker_positions(text)
+    if len(positions) == 1:
+        marker_index = positions[0]
+        prefix = text[:marker_index].strip()
+        suffix = text[marker_index + 1:].strip()
+        close_index = _matching_artist_group_close(suffix)
+        if prefix and suffix.startswith("(") and close_index == len(suffix) - 1:
+            content = suffix[1:-1].strip()
+            extension = re.match(r"^&\s+(.+)$", content, flags=re.S)
+            if extension:
+                return _artist_identity_values(prefix) + _artist_identity_values(extension.group(1).strip())
+
     values: List[str] = []
-    for part in _split_multi_identity(value):
+    for part in _split_multi_identity(text):
         for candidate in _artist_identity_candidates_for_part(part):
             normalized = _normalized_identity_text(candidate)
             if normalized and normalized not in values:
@@ -519,12 +532,36 @@ def format_share_display_title(value: Any) -> str:
             output.append(shown)
     return " ".join(output) or "곡명 없음"
 
+def format_share_display_artist(value: Any) -> str:
+    parts = _split_multi_identity(value)
+    output: List[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        positions = _top_level_artist_marker_positions(text)
+        if len(positions) == 1:
+            marker_index = positions[0]
+            prefix = text[:marker_index].strip()
+            suffix = text[marker_index + 1:].strip()
+            close_index = _matching_artist_group_close(suffix)
+            if prefix and suffix.startswith("(") and close_index == len(suffix) - 1:
+                shown = prefix
+            else:
+                shown = text.replace("ㅨ", "")
+        else:
+            shown = text.replace("ㅨ", "")
+        shown = re.sub(r"\s{2,}", " ", shown).strip()
+        if shown and shown not in output:
+            output.append(shown)
+    return " ".join(output) or "아티스트 미상"
+
 def format_share_description(song: Dict[str, Any]) -> str:
     year = to_int(song.get("year"))
     month = to_int(song.get("month"))
     day = to_int(song.get("day"))
     date_prefix = f"{year}년 {month:02d}월 {day:02d}일 " if year > 0 and 1 <= month <= 12 and 1 <= day <= 31 else ""
-    artist = format_share_display_title(song.get("artist", "")) or "아티스트 미상"
+    artist = format_share_display_artist(song.get("artist", "")) or "아티스트 미상"
     title = format_share_display_title(song.get("title", "")) or "곡명 없음"
     return f"버츄얼 스트리머 유레이🍇👻 의 {date_prefix}방송에서 부른 「{artist} - {title}」"
 
