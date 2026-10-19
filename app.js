@@ -297,6 +297,7 @@
 
   let allSongs = [];
   let filteredSongs = [];
+  const invalidArtistExpressionWarningKeys = new Set();
   let songbookSongs = [];
   let recommendMode = "random";
   let recommendVisibleCount = RECOMMEND_LIMITS.random;
@@ -1078,7 +1079,10 @@
           el.dataset.modalSuppressNextClick = "";
           return;
         }
-        copyModalInfoText_(el);
+        const clickedArtistChip = el === els.modalSongArtist && event.target && event.target.closest
+          ? event.target.closest(".modal-artist-chip")
+          : null;
+        copyModalInfoText_(clickedArtistChip && el.contains(clickedArtistChip) ? clickedArtistChip : el);
       });
       el.addEventListener("contextmenu", event => {
         if (!isDesktopContextCopyEnabled()) return;
@@ -2017,8 +2021,14 @@
   }
 
   function normalizeSongs(songs) {
-    return songs
+    return (Array.isArray(songs) ? songs : [])
       .filter(item => item && item.id)
+      .filter(item => {
+        const validation = parseArtistExpression_(item.artist);
+        if (validation.valid) return true;
+        logInvalidArtistSong_(item, validation.reason);
+        return false;
+      })
       .map(item => {
         const id = String(item.id || "").trim();
 
@@ -2032,7 +2042,7 @@
           title: String(item.title || ""),
           category: String(item.category || ""),
           country: String(item.country || ""),
-          artistValues: splitMultiValue(item.artist),
+          artistValues: getArtistValues({ artist: item.artist }),
           titleValues: splitMultiValue(item.title),
           categoryValues: splitMultiValue(item.category),
           countryValues: splitMultiValue(item.country),
@@ -2052,6 +2062,8 @@
         };
       });
   }
+
+
 
   function normalizeSongEndValue_(timeline, end) {
     const startText = String(timeline || "").trim();
@@ -2083,13 +2095,18 @@
       const artist = cleanField(item && item.artist);
       const country = cleanField(item && item.country);
       const category = cleanField(item && item.category);
+      const validation = parseArtistExpression_(artist);
+      if (!validation.valid) {
+        logInvalidArtistSong_({ id: `songbook:${index + 1}`, title, artist }, validation.reason);
+        return null;
+      }
       return {
         title,
         artist,
         country,
         category,
         titleValues: splitMultiValue(title),
-        artistValues: splitMultiValue(artist),
+        artistValues: getArtistValues({ artist }),
         countryValues: splitMultiValue(country),
         categoryValues: splitMultiValue(category),
         _songbookOnly: true,
@@ -2678,9 +2695,8 @@
   }
 
   function getModalArtistFilterValues_(text) {
-    return stripModalActionMarkers_(text)
-      .split(/\s+&\s+/)
-      .map(value => stripModalActionMarkers_(value))
+    return getModalArtistChipDescriptors_(stripModalActionMarkers_(text))
+      .map(item => stripModalActionMarkers_(item && item.filterValue || item && item.label || ""))
       .filter(Boolean);
   }
 
@@ -3159,78 +3175,298 @@
     return String(value || "").trim() === "❓";
   }
 
+  function getArtistBracketValidationError_(value) {
+    const text = String(value || "");
+    const stack = [];
+    const expected = { "(": ")", "[": "]" };
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (Object.prototype.hasOwnProperty.call(expected, char)) {
+        stack.push({ close: expected[char], index, open: char });
+      } else if (char === ")" || char === "]") {
+        const last = stack.pop();
+        if (!last || last.close !== char) {
+          return `닫는 괄호 '${char}'가 맞지 않습니다 (위치 ${index + 1})`;
+        }
+      }
+    }
+    if (stack.length) {
+      const last = stack[stack.length - 1];
+      return `여는 괄호 '${last.open}'가 닫히지 않았습니다 (위치 ${last.index + 1})`;
+    }
+    return "";
+  }
+
+  function splitTopLevelArtistValues_(value) {
+    const text = String(value || "").trim();
+    if (!text) return [];
+    const result = [];
+    const stack = [];
+    const expected = { "(": ")", "[": "]" };
+    let start = 0;
+
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (Object.prototype.hasOwnProperty.call(expected, char)) {
+        stack.push(expected[char]);
+      } else if (char === ")" || char === "]") {
+        if (stack.length) stack.pop();
+      } else if (char === "&" && !stack.length &&
+          (index === 0 || /\s/u.test(text[index - 1])) &&
+          (index === text.length - 1 || /\s/u.test(text[index + 1]))) {
+        result.push(text.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    result.push(text.slice(start).trim());
+    return result;
+  }
+
+  function getTopLevelArtistMarkerPositions_(value) {
+    const text = String(value || "");
+    const positions = [];
+    const stack = [];
+    const expected = { "(": ")", "[": "]" };
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === "ㅨ" && stack.length === 0) positions.push(index);
+      if (Object.prototype.hasOwnProperty.call(expected, char)) {
+        stack.push(expected[char]);
+      } else if (char === ")" || char === "]") {
+        if (stack.length) stack.pop();
+      }
+    }
+    return positions;
+  }
+
+  function findArtistGroupClose_(value) {
+    const text = String(value || "");
+    if (!text.startsWith("(")) return -1;
+    let depth = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === "(") depth += 1;
+      else if (text[index] === ")") {
+        depth -= 1;
+        if (depth === 0) return index;
+        if (depth < 0) return -1;
+      }
+    }
+    return -1;
+  }
+
   function parseSpecialArtistDisplayRule_(value) {
     const text = String(value || "").trim();
-    const match = text.match(/^(.*?)\s*\(ㅨ([\s\S]*?)\)\s*$/u);
-    if (!match) return null;
+    const match = text.match(/^(.*?)\s*\(\s*ㅨ\s*([^()]+?)\s*\)\s*$/u);
+    if (!match || (text.match(/ㅨ/g) || []).length !== 1) return null;
 
-    const characterName = String(match[1] || "").trim();
-    const vocalistName = String(match[2] || "").trim();
-    if (!characterName || !vocalistName) return null;
+    const vocalistName = String(match[1] || "").trim();
+    const characterName = String(match[2] || "").trim();
+    if (!vocalistName || !characterName || splitTopLevelArtistValues_(characterName).length !== 1) return null;
 
     return {
-      characterName,
       vocalistName,
-      display: `${characterName} (${vocalistName})`
+      characterName,
+      display: `${vocalistName} (${characterName})`
     };
   }
 
-  function formatArtistValueForDisplay_(value) {
+  function parseArtistValue_(value, depth = 0) {
     const text = String(value || "").trim();
-    if (!text) return "";
-    if (isUnknownArtistValue_(text)) return "";
-    const special = parseSpecialArtistDisplayRule_(text);
-    if (special) return special.display;
-    return text
-      .replace(/\(\s*ㅨ\s*([^)]*?)\s*\)/gu, "($1)")
-      .replaceAll("ㅨ", "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
+    if (!text) return { valid: false, type: "invalid", raw: text, reason: "빈 아티스트 항목입니다" };
+    if (depth > 8) return { valid: false, type: "invalid", raw: text, reason: "아티스트 괄호 중첩이 너무 깊습니다" };
+
+    const bracketError = getArtistBracketValidationError_(text);
+    if (bracketError) return { valid: false, type: "invalid", raw: text, reason: bracketError };
+
+    const topLevelMarkers = getTopLevelArtistMarkerPositions_(text);
+    if (topLevelMarkers.length) {
+      if (topLevelMarkers.length !== 1) {
+        return { valid: false, type: "invalid", raw: text, reason: "괄호 바깥의 ㅨ 표기는 한 번만 선언할 수 있습니다" };
+      }
+      const markerIndex = topLevelMarkers[0];
+      const prefix = text.slice(0, markerIndex).trim();
+      const suffix = text.slice(markerIndex + 1).trim();
+      if (!prefix || prefix.includes("ㅨ") || !suffix.startsWith("(")) {
+        return { valid: false, type: "invalid", raw: text, reason: "괄호 바깥 ㅨ는 '아티스트 ㅨ(...)' 형식이어야 합니다" };
+      }
+      const closeIndex = findArtistGroupClose_(suffix);
+      if (closeIndex !== suffix.length - 1) {
+        return { valid: false, type: "invalid", raw: text, reason: "ㅨ 뒤의 괄호 그룹이 끝까지 닫히지 않았거나 불필요한 텍스트가 있습니다" };
+      }
+
+      const content = suffix.slice(1, -1).trim();
+      const rawChildren = splitTopLevelArtistValues_(content);
+      if (!content || !rawChildren.length || rawChildren.some(item => !item)) {
+        return { valid: false, type: "invalid", raw: text, reason: "ㅨ 괄호 안의 아티스트 목록이 비어 있거나 항목 구분이 잘못되었습니다" };
+      }
+      const children = rawChildren.map(item => parseArtistValue_(item, depth + 1));
+      const invalidChild = children.find(item => !item.valid);
+      if (invalidChild) {
+        return { valid: false, type: "invalid", raw: text, reason: `괄호 안 '${invalidChild.raw}' 형식 오류: ${invalidChild.reason}` };
+      }
+      return { valid: true, type: "outer", raw: text, prefix, children, display: prefix };
+    }
+
+    if (text.includes("ㅨ")) {
+      const special = parseSpecialArtistDisplayRule_(text);
+      if (!special) {
+        return {
+          valid: false,
+          type: "invalid",
+          raw: text,
+          reason: "ㅨ는 괄호 안쪽의 첫 문자('AAA (ㅨBBB)') 또는 괄호 바깥의 'CCC ㅨ(...)' 형식이어야 합니다"
+        };
+      }
+      return { valid: true, type: "paired", raw: text, ...special };
+    }
+
+    return { valid: true, type: "plain", raw: text, display: text };
+  }
+
+  function parseArtistExpression_(value) {
+    const text = String(value || "").trim();
+    if (!text) return { valid: true, raw: text, artists: [], reason: "" };
+    const bracketError = getArtistBracketValidationError_(text);
+    if (bracketError) return { valid: false, raw: text, artists: [], reason: bracketError };
+
+    const parts = splitTopLevelArtistValues_(text);
+    if (!parts.length || parts.some(part => !part)) {
+      return { valid: false, raw: text, artists: [], reason: "아티스트 사이의 & 구분자가 잘못되었습니다" };
+    }
+    const artists = parts.map(part => parseArtistValue_(part));
+    const invalid = artists.find(item => !item.valid);
+    if (invalid) {
+      return { valid: false, raw: text, artists: [], reason: `'${invalid.raw}' 형식 오류: ${invalid.reason}` };
+    }
+    return { valid: true, raw: text, artists, reason: "" };
+  }
+
+  function getArtistNodeDisplayText_(node) {
+    if (!node || !node.valid) return "";
+    if (node.type === "outer") return isUnknownArtistValue_(node.prefix) ? "" : node.prefix;
+    if (node.type === "paired") {
+      if (isUnknownArtistValue_(node.vocalistName)) return "";
+      if (isUnknownArtistValue_(node.characterName)) return node.vocalistName;
+      return node.display;
+    }
+    return isUnknownArtistValue_(node.raw) ? "" : node.raw;
+  }
+
+  function formatArtistValueForDisplay_(value) {
+    const parsed = parseArtistValue_(value);
+    return parsed.valid ? getArtistNodeDisplayText_(parsed) : "";
   }
 
   function formatArtistTextForDisplay_(value, separator = " & ") {
-    const values = splitMultiValue(value);
-    if (!values.length) return formatArtistValueForDisplay_(value);
-    return values.map(formatArtistValueForDisplay_).filter(Boolean).join(separator);
+    const parsed = parseArtistExpression_(value);
+    if (!parsed.valid) return "";
+    return parsed.artists.map(getArtistNodeDisplayText_).filter(Boolean).join(separator);
+  }
+
+  function getSungArtistNodeDisplayText_(node) {
+    if (!node || !node.valid) return "";
+    if (node.type === "outer") return isUnknownArtistValue_(node.prefix) ? "(아티스트 정보없음)" : node.prefix;
+    if (node.type === "plain" && isUnknownArtistValue_(node.raw)) return "(아티스트 정보없음)";
+    return getArtistNodeDisplayText_(node);
   }
 
   function formatSungSongArtistText_(value) {
-    const raw = String(value || "").trim();
-    if (!raw) return "";
-    const values = splitMultiValue(raw);
-    if (!values.length) return isUnknownArtistValue_(raw) ? "(아티스트 정보없음)" : formatArtistValueForDisplay_(raw);
-    return values
-      .map(item => isUnknownArtistValue_(item) ? "(아티스트 정보없음)" : formatArtistValueForDisplay_(item))
-      .filter(Boolean)
-      .join(" & ");
+    const parsed = parseArtistExpression_(value);
+    if (!parsed.valid) return "";
+    return parsed.artists.map(getSungArtistNodeDisplayText_).filter(Boolean).join(" & ");
+  }
+
+  function getArtistValues(song) {
+    const parsed = parseArtistExpression_(song && song.artist || "");
+    return parsed.valid ? parsed.artists.map(item => item.raw) : [];
   }
 
   function getArtistDisplayValues_(song) {
-    return getArtistValues(song).map(formatArtistValueForDisplay_).filter(Boolean);
+    const parsed = parseArtistExpression_(song && song.artist || "");
+    return parsed.valid ? parsed.artists.map(getArtistNodeDisplayText_).filter(Boolean) : [];
+  }
+
+  function getArtistSearchValuesFromNode_(node) {
+    if (!node || !node.valid) return [];
+    if (node.type === "plain") return isUnknownArtistValue_(node.raw) ? [] : [node.raw];
+    if (node.type === "paired") {
+      return [node.vocalistName, node.characterName, node.display]
+        .filter(value => value && !isUnknownArtistValue_(value));
+    }
+
+    const values = [];
+    if (node.prefix && !isUnknownArtistValue_(node.prefix)) values.push(node.prefix);
+    node.children.forEach(child => values.push(...getArtistSearchValuesFromNode_(child)));
+    if (node.children.length === 1 && !isUnknownArtistValue_(node.prefix)) {
+      const child = node.children[0];
+      if (child.type === "plain" && !isUnknownArtistValue_(child.raw)) values.push(`${node.prefix} (${child.raw})`);
+    }
+    return values;
   }
 
   function getArtistSearchValuesForValue_(value) {
-    const raw = String(value || "").trim();
-    if (!raw || isUnknownArtistValue_(raw)) return [];
-    const special = parseSpecialArtistDisplayRule_(raw);
-    const values = special
-      ? [special.characterName, special.vocalistName, special.display, raw]
-      : [raw, formatArtistValueForDisplay_(raw)];
-    return [...new Set(values.map(item => String(item || "").trim()).filter(Boolean))];
+    const parsed = parseArtistValue_(value);
+    return parsed.valid ? getArtistSearchValuesFromNode_(parsed) : [];
   }
 
   function getArtistSearchValues_(song) {
-    return getArtistValues(song).flatMap(getArtistSearchValuesForValue_);
+    const parsed = parseArtistExpression_(song && song.artist || "");
+    return parsed.valid ? parsed.artists.flatMap(getArtistSearchValuesFromNode_).filter(Boolean) : [];
   }
 
   function getArtistBadgeDescriptors_(song) {
-    return getArtistValues(song).map(value => {
-      if (isUnknownArtistValue_(value)) return null;
-      const special = parseSpecialArtistDisplayRule_(value);
-      const label = special ? special.vocalistName : formatArtistValueForDisplay_(value);
-      const filterValue = special ? special.vocalistName : formatArtistValueForDisplay_(value);
-      return { label, filterValue };
+    const parsed = parseArtistExpression_(song && song.artist || "");
+    if (!parsed.valid) return [];
+    return parsed.artists.map(node => {
+      if (node.type === "outer") {
+        if (isUnknownArtistValue_(node.prefix)) return null;
+        return { label: node.prefix, filterValue: node.prefix };
+      }
+      if (node.type === "paired") {
+        const label = isUnknownArtistValue_(node.characterName) ? node.vocalistName : node.characterName;
+        return label && !isUnknownArtistValue_(label) ? { label, filterValue: label } : null;
+      }
+      if (isUnknownArtistValue_(node.raw)) return null;
+      return { label: node.raw, filterValue: node.raw };
     }).filter(item => item && item.label && item.label !== "-");
+  }
+
+  function getModalArtistChipDescriptorsForNode_(node) {
+    if (!node || !node.valid) return [];
+    const makeChip = value => ({ label: String(value || "").trim(), filterValue: String(value || "").trim() });
+
+    if (node.type === "plain") {
+      return isUnknownArtistValue_(node.raw) ? [] : [makeChip(node.raw)];
+    }
+    if (node.type === "paired") {
+      const label = getArtistNodeDisplayText_(node);
+      return label && !label.includes("❓") ? [makeChip(label)] : [];
+    }
+
+    const prefix = isUnknownArtistValue_(node.prefix) ? [] : [makeChip(node.prefix)];
+    if (node.children.length === 1 && node.children[0].type === "plain" && !isUnknownArtistValue_(node.prefix) && !isUnknownArtistValue_(node.children[0].raw)) {
+      return [makeChip(`${node.prefix} (${node.children[0].raw})`)];
+    }
+    return [
+      ...prefix,
+      ...node.children.flatMap(getModalArtistChipDescriptorsForNode_)
+    ];
+  }
+
+  function getModalArtistChipDescriptors_(value) {
+    const parsed = parseArtistExpression_(value);
+    if (!parsed.valid) return [];
+    return parsed.artists.flatMap(getModalArtistChipDescriptorsForNode_);
+  }
+
+  function logInvalidArtistSong_(item, reason) {
+    const id = String(item && item.id || "(ID 없음)").trim();
+    const title = String(item && item.title || "(곡명 없음)").trim();
+    const artist = String(item && item.artist || "").trim();
+    const key = `${id}\u0000${title}\u0000${artist}\u0000${String(reason || "")}`;
+    if (invalidArtistExpressionWarningKeys.has(key)) return;
+    invalidArtistExpressionWarningKeys.add(key);
+    console.error("[아티스트 표기 오류: 곡 제외]", { id, title, artist, reason: String(reason || "형식 오류") });
   }
 
   function formatDisplaySongTitleText_(value) {
@@ -3324,13 +3560,6 @@
       : [String(song.title || "").trim()].filter(Boolean);
   }
 
-  function getArtistValues(song) {
-    const values = splitMultiValue(song.artist);
-    return values.length
-      ? values
-      : [String(song.artist || "").trim()].filter(Boolean);
-  }
-
   function getCategoryValues(song) {
     const values = Array.isArray(song.categoryValues) ? song.categoryValues : splitMultiValue(song.category);
     return values.length ? values : [String(song.category || "").trim()].filter(Boolean);
@@ -3363,7 +3592,7 @@
 
   function getDisplayArtist(song) {
     const values = getArtistDisplayValues_(song);
-    return values.length ? values.join(" ") : "아티스트 없음";
+    return values.length ? values.join(" & ") : "아티스트 없음";
   }
 
   function getRawDisplayArtist(song) {
@@ -4105,7 +4334,7 @@
     const titleText = getDisplayTitle(song);
     const searchableTitleText = getSearchableDisplayTitle_(song);
     const artistText = getDisplayArtist(song);
-    const modalArtistText = artistText;
+    const modalArtistText = String(song.artist || "");
 
     const timelineUrl = song.link && song.timeline ? makeTimelineLink(song.link, song.timeline) : "";
     const youtubeUrl = song.link ? makeTimelineLink(song.link, song.timeline) : "";
@@ -4365,7 +4594,7 @@
     window.setTimeout(() => {
       openYoutubeModal(youtubeUrl, {
         title: getDisplayTitle(song),
-        artist: getRawDisplayArtist(song),
+        artist: String(song.artist || ""),
         date: formatSongDate(song),
         timeline: song.timeline || "",
         end: song.end || "",
@@ -4400,7 +4629,7 @@
     window.setTimeout(() => {
       openYoutubeModal(youtubeUrl, {
         title: getDisplayTitle(song),
-        artist: getRawDisplayArtist(song),
+        artist: String(song.artist || ""),
         date: formatSongDate(song),
         timeline: song.timeline || "",
         end: song.end || "",
@@ -4659,20 +4888,31 @@
 
   function appendModalScrollingTextContent_(inner, value, options = {}) {
     const text = String(value || "");
-    const artistParts = options.artistParts === true ? getModalArtistFilterValues_(text) : [];
+    const hasArtistParts = Array.isArray(options.artistParts);
+    const artistParts = hasArtistParts
+      ? options.artistParts
+      : options.artistParts === true
+        ? getModalArtistChipDescriptors_(text)
+        : null;
 
-    if (artistParts.length <= 1) {
+    if (!artistParts) {
       inner.textContent = text;
       return;
     }
 
-    artistParts.forEach((part, index) => {
-      if (index > 0) inner.appendChild(document.createTextNode(" & "));
-      const span = document.createElement("span");
-      span.className = "modal-filter-part";
-      span.dataset.modalFilterValue = part;
-      span.textContent = part;
-      inner.appendChild(span);
+    artistParts.forEach(item => {
+      const label = String(item && item.label || item || "").trim();
+      const filterValue = String(item && item.filterValue || label).trim();
+      if (!label || !filterValue || label === "❓") return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "modal-artist-chip";
+      button.dataset.modalFilterValue = filterValue;
+      button.dataset.copyText = label;
+      button.textContent = label;
+      button.title = `클릭하면 '${label}'을 복사합니다. 길게 누르면 해당 아티스트로 필터링합니다.`;
+      button.setAttribute("aria-label", `아티스트 ${label}`);
+      inner.appendChild(button);
     });
   }
 
@@ -4751,8 +4991,9 @@
   }
 
   function setModalArtistText_(text) {
-    currentModalArtistText = formatArtistTextForDisplay_(text);
-    setModalScrollingText_(els.modalSongArtist, currentModalArtistText, { artistParts: true });
+    const artistChips = getModalArtistChipDescriptors_(text);
+    currentModalArtistText = artistChips.map(item => item.label).filter(Boolean).join(" & ");
+    setModalScrollingText_(els.modalSongArtist, currentModalArtistText, { artistParts: artistChips });
     refreshPlayingTabTitle_();
   }
 
@@ -8677,7 +8918,7 @@
         key: getPlaylistItemKey_(item),
         song,
         title: getDisplayTitle(song),
-        artist: getRawDisplayArtist(song),
+        artist: String(song.artist || ""),
         section: "",
         url: song.link,
         videoId: extractYoutubeVideoId(song.link),

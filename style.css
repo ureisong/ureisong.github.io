@@ -1124,6 +1124,50 @@ html.dark-mode .like-button.liking {
   text-shadow: none;
 }
 
+.modal-song-artist .modal-marquee-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+
+.modal-artist-chip {
+  appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(72vw, 420px);
+  min-width: 0;
+  padding: 2px 9px 3px;
+  border: 1px solid rgba(199, 187, 224, 0.48);
+  border-radius: 999px;
+  background: rgba(111, 79, 159, 0.24);
+  color: inherit;
+  font: inherit;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  text-shadow: none;
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.modal-artist-chip:hover,
+.modal-artist-chip:focus-visible {
+  border-color: rgba(224, 206, 255, 0.92);
+  background: rgba(139, 92, 246, 0.3);
+}
+
+.modal-artist-chip:active {
+  transform: scale(0.98);
+}
+
+.modal-artist-chip:focus-visible {
+  outline: 2px solid rgba(224, 206, 255, 0.9);
+  outline-offset: 2px;
+}
+
 .modal-marquee-inner {
   display: inline-block;
   max-width: none;

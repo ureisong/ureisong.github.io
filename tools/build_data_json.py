@@ -161,22 +161,109 @@ def _song_title_key(value: Any) -> str:
     return _normalized_identity_text(text)
 
 def _split_multi_identity(value: Any) -> List[str]:
-    parts = [part.strip() for part in re.split(r"(?:\s+&\s*|\s*&\s+)", str(value or "")) if part.strip()]
-    return parts or ([str(value).strip()] if str(value or "").strip() else [""])
+    text = str(value or "").strip()
+    if not text:
+        return [""]
+
+    parts: List[str] = []
+    stack: List[str] = []
+    expected = {"(": ")", "[": "]"}
+    start = 0
+    for index, char in enumerate(text):
+        if char in expected:
+            stack.append(expected[char])
+        elif char in {")", "]"}:
+            if stack and stack[-1] == char:
+                stack.pop()
+        elif (
+            char == "&"
+            and not stack
+            and index > 0
+            and index + 1 < len(text)
+            and text[index - 1].isspace()
+            and text[index + 1].isspace()
+        ):
+            part = text[start:index].strip()
+            if part:
+                parts.append(part)
+            start = index + 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts or [text]
+
+
+def _top_level_artist_marker_positions(value: str) -> List[int]:
+    positions: List[int] = []
+    stack: List[str] = []
+    expected = {"(": ")", "[": "]"}
+    for index, char in enumerate(value):
+        if char == "ㅨ" and not stack:
+            positions.append(index)
+        if char in expected:
+            stack.append(expected[char])
+        elif char in {")", "]"} and stack and stack[-1] == char:
+            stack.pop()
+    return positions
+
+
+def _matching_artist_group_close(value: str) -> int:
+    if not value.startswith("("):
+        return -1
+    depth = 0
+    for index, char in enumerate(value):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+            if depth < 0:
+                return -1
+    return -1
+
+
+def _artist_identity_candidates_for_part(value: Any, depth: int = 0) -> List[str]:
+    text = str(value or "").strip()
+    if not text or text == "❓":
+        return []
+    if depth > 8:
+        return [text]
+
+    paired = re.fullmatch(r"(.*?)\s*\(\s*ㅨ\s*([^()]+?)\s*\)\s*", text)
+    if paired and text.count("ㅨ") == 1:
+        vocalist = paired.group(1).strip()
+        character = paired.group(2).strip()
+        if vocalist and character:
+            return [vocalist, character, f"{vocalist} ({character})"]
+
+    positions = _top_level_artist_marker_positions(text)
+    if positions:
+        if len(positions) != 1:
+            return [text]
+        marker_index = positions[0]
+        prefix = text[:marker_index].strip()
+        suffix = text[marker_index + 1:].strip()
+        close_index = _matching_artist_group_close(suffix)
+        if prefix and suffix.startswith("(") and close_index == len(suffix) - 1:
+            content = suffix[1:-1].strip()
+            children = _split_multi_identity(content)
+            if content and children and all(children):
+                candidates = [prefix]
+                for child in children:
+                    candidates.extend(_artist_identity_candidates_for_part(child, depth + 1))
+                if len(children) == 1 and "ㅨ" not in children[0]:
+                    candidates.append(f"{prefix} ({children[0]})")
+                return candidates
+        return [text]
+
+    return [text]
+
 
 def _artist_identity_values(value: Any) -> List[str]:
     values: List[str] = []
     for part in _split_multi_identity(value):
-        if part == "❓":
-            continue
-        match = re.fullmatch(r"(.*?)\s*\(ㅨ(.*?)\)\s*", part)
-        if match and match.group(1).strip() and match.group(2).strip():
-            character_name = match.group(1).strip()
-            vocalist_name = match.group(2).strip()
-            candidates = [character_name, vocalist_name, f"{character_name} ({vocalist_name})"]
-        else:
-            candidates = [part]
-        for candidate in candidates:
+        for candidate in _artist_identity_candidates_for_part(part):
             normalized = _normalized_identity_text(candidate)
             if normalized and normalized not in values:
                 values.append(normalized)
@@ -420,7 +507,7 @@ def share_page_filename(song_id: Any) -> str:
     return quote(str(song_id or "").strip(), safe="-_.~") + ".html"
 
 def format_share_display_title(value: Any) -> str:
-    parts = [part.strip() for part in str(value or "").split(" & ") if part.strip()]
+    parts = _split_multi_identity(value)
     if not parts:
         return "곡명 없음"
     output = []
