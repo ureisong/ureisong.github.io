@@ -24,6 +24,7 @@ SHARE_PAGE_ATTRIBUTE = 'data-generated-song-share="true"'
 SITE_TITLE = "들어줄레이🍇👻"
 KST = timezone(timedelta(hours=9))
 USER_AGENT = "songs-data-json-builder/2.0"
+SEARCH_ALIASES_SCHEMA_VERSION = 3
 
 def get_config_url(name: str) -> str:
     env_value = str(os.environ.get(name, "") or "").strip()
@@ -390,15 +391,63 @@ def parse_aliases_cell(value: Any) -> List[str]:
         values = text.split(",")
     return list(dict.fromkeys(part.strip().strip('"').strip() for part in values if part.strip().strip('"').strip()))
 
+def _is_search_alias_mode_override(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"TRUE", "1", "Y", "YES", "ON", "ㅇ"}
+
+def normalize_search_alias_trigger_mode(value: Any, default_mode: str = "EXACT") -> str:
+    text = str(value or "").strip().upper()
+    normalized_default = "PARTIAL" if default_mode == "PARTIAL" else "EXACT"
+    if text == "EXACT":
+        return "EXACT"
+    if text == "PARTIAL":
+        return "PARTIAL"
+    if _is_search_alias_mode_override(text):
+        return "EXACT" if normalized_default == "PARTIAL" else "PARTIAL"
+    if text in {"FALSE", "0", "N", "NO", "OFF"}:
+        return normalized_default
+    return normalized_default
+
+def normalize_search_alias_match_mode(value: Any, default_mode: str = "WORD") -> str:
+    text = str(value or "").strip().upper()
+    normalized_default = "SUBSTRING" if default_mode == "SUBSTRING" else "WORD"
+    if text == "WORD":
+        return "WORD"
+    if text == "SUBSTRING":
+        return "SUBSTRING"
+    if _is_search_alias_mode_override(text):
+        return "WORD" if normalized_default == "SUBSTRING" else "SUBSTRING"
+    if text in {"FALSE", "0", "N", "NO", "OFF"}:
+        return normalized_default
+    return normalized_default
+
+def _search_alias_mode_column(rows: List[Dict[str, str]], mode_name: str) -> tuple[str, str]:
+    is_trigger = mode_name == "trigger_mode"
+    base_default = "EXACT" if is_trigger else "WORD"
+    suffix_modes = {"E": "EXACT", "P": "PARTIAL"} if is_trigger else {"W": "WORD", "S": "SUBSTRING"}
+    headers = list(rows[0].keys()) if rows else []
+    suffix_pattern = re.compile(rf"^{re.escape(mode_name)}\s*:\s*([A-Z])$", re.IGNORECASE)
+
+    for header in headers:
+        match = suffix_pattern.fullmatch(str(header).strip())
+        if match and match.group(1).upper() in suffix_modes:
+            return header, suffix_modes[match.group(1).upper()]
+
+    camel_name = "triggerMode" if is_trigger else "matchMode"
+    plain_header = next((header for header in headers if str(header).strip().lower() in {mode_name.lower(), camel_name.lower()}), mode_name)
+    return plain_header, base_default
+
 def build_search_aliases(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
     aliases: Dict[str, Dict[str, Any]] = {}
+    trigger_column, trigger_default = _search_alias_mode_column(rows, "trigger_mode")
+    match_column, match_default = _search_alias_mode_column(rows, "match_mode")
     for row in rows:
         word = str(row.get("word", "")).strip()
         if not word:
             continue
         aliases[word] = {
             "aliases": parse_aliases_cell(row.get("aliases")),
-            "exact": str(row.get("exact", row.get("exact_match", row.get("unanimous", row.get("perfect", ""))))).strip().lower() == "true",
+            "triggerMode": normalize_search_alias_trigger_mode(row.get(trigger_column, ""), trigger_default),
+            "matchMode": normalize_search_alias_match_mode(row.get(match_column, ""), match_default),
         }
     return aliases
 
@@ -477,6 +526,7 @@ def build_payload(songs: List[Dict[str, str]], likes: List[Dict[str, str]], noti
         "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
         "dataVersion": settings.get("version_songs", ""),
         "searchAliasesVersion": settings.get("version_search_aliases", ""),
+        "searchAliasesSchemaVersion": SEARCH_ALIASES_SCHEMA_VERSION,
         "data": data,
         "songbook": cleaned_songbook,
         "notices": notices,

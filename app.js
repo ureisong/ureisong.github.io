@@ -28,8 +28,9 @@
   const NOTICE_SPEED_PX_PER_SECOND = Math.max(1, Number(CONFIG.NOTICE_SPEED_PX_PER_SECOND || 30));
   const CSV_CACHE_PREFIX = "csv_cache_";
   const SONGS_CSV_CACHE_NAME = "songs_csv_cache";
-  const SEARCH_ALIASES_CSV_CACHE_NAME = "search_aliases_v3";
-  const SEARCH_ALIASES_CACHE_SCHEMA_VERSION = 1;
+  const SEARCH_ALIASES_CSV_CACHE_NAME = "search_aliases";
+  const SEARCH_ALIASES_CACHE_SCHEMA_VERSION = 3;
+  const SEARCH_ALIASES_DATA_SCHEMA_VERSION = 3;
   const LOCAL_DATA_CACHE_KEY = "songs_data_cache";
   const LOCAL_DATA_CACHE_SCHEMA_VERSION = 2;
   const SETTINGS_VERSION_SONGS = "version_songs";
@@ -431,6 +432,7 @@
   document.addEventListener("DOMContentLoaded", init);
 
   async function init() {
+    normalizeCsvCacheStorageKeys_();
     const initialSongId = getInitialSongIdQuery_();
     const isLocalDevelopment = isLocalDevelopmentHost_();
     showPageLoading("...LOADING...", initialSongId ? "요청한 곡을 불러오고 있어요..." : "노래 목록을 불러오고 있어요...");
@@ -1221,49 +1223,99 @@
 
   function normalizeSearchAliasesRows(rows) {
     const result = {};
+    const triggerModeColumn = getSearchAliasModeColumn_(rows, "trigger_mode");
+    const matchModeColumn = getSearchAliasModeColumn_(rows, "match_mode");
 
     rows.forEach(row => {
       const word = String(row.word || "").trim();
       if (!word) return;
 
-      const aliases = parseAliasesCell(row.aliases);
-      const exact = normalizeBoolean(row.exact ?? row.exact_match ?? row.unanimous ?? row.perfect);
-      result[word] = { aliases, exact };
-    });
-
-    return result;
-  }
-
-  function normalizeSearchAliasesObject(obj) {
-    const result = {};
-
-    Object.entries(obj || {}).forEach(([word, aliases]) => {
-      const key = String(word || "").trim();
-      if (!key) return;
-
-      if (aliases && typeof aliases === "object" && !Array.isArray(aliases)) {
-        result[key] = {
-          aliases: Array.isArray(aliases.aliases)
-            ? aliases.aliases.map(v => String(v || "").trim()).filter(Boolean)
-            : parseAliasesCell(aliases.aliases),
-          exact: normalizeBoolean(aliases.exact ?? aliases.exact_match ?? aliases.unanimous ?? aliases.perfect)
-        };
-        return;
-      }
-
-      result[key] = {
-        aliases: Array.isArray(aliases)
-          ? aliases.map(v => String(v || "").trim()).filter(Boolean)
-          : parseAliasesCell(aliases),
-        exact: false
+      result[word] = {
+        aliases: parseAliasesCell(row.aliases),
+        triggerMode: normalizeSearchAliasTriggerMode_(row[triggerModeColumn.key], triggerModeColumn.defaultMode),
+        matchMode: normalizeSearchAliasMatchMode_(row[matchModeColumn.key], matchModeColumn.defaultMode)
       };
     });
 
     return result;
   }
 
-  function normalizeBoolean(value) {
-    return String(value ?? "").trim().toLowerCase() === "true";
+  function getSearchAliasModeColumn_(rows, modeName) {
+    const headers = Object.keys(rows && rows[0] ? rows[0] : {});
+    const isTrigger = modeName === "trigger_mode";
+    const baseDefault = isTrigger ? "EXACT" : "WORD";
+    const suffixModes = isTrigger
+      ? { E: "EXACT", P: "PARTIAL" }
+      : { W: "WORD", S: "SUBSTRING" };
+
+    const suffixHeader = headers.find(header => {
+      const match = String(header).trim().match(new RegExp(`^${modeName}\\s*:\\s*([A-Z])$`, "i"));
+      return Boolean(match && Object.prototype.hasOwnProperty.call(suffixModes, match[1].toUpperCase()));
+    });
+
+    if (suffixHeader) {
+      const match = String(suffixHeader).trim().match(new RegExp(`^${modeName}\\s*:\\s*([A-Z])$`, "i"));
+      return { key: suffixHeader, defaultMode: suffixModes[match[1].toUpperCase()] };
+    }
+
+    const camelName = isTrigger ? "triggerMode" : "matchMode";
+    const plainHeader = headers.find(header => [modeName.toLowerCase(), camelName.toLowerCase()].includes(String(header).trim().toLowerCase()));
+    return { key: plainHeader || modeName, defaultMode: baseDefault };
+  }
+
+  function normalizeSearchAliasesObject(obj) {
+    const result = {};
+
+    Object.entries(obj || {}).forEach(([word, entry]) => {
+      const key = String(word || "").trim();
+      if (!key) return;
+
+      if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+        result[key] = {
+          aliases: Array.isArray(entry.aliases)
+            ? entry.aliases.map(v => String(v || "").trim()).filter(Boolean)
+            : parseAliasesCell(entry.aliases),
+          triggerMode: normalizeSearchAliasTriggerMode_(entry.triggerMode ?? entry.trigger_mode),
+          matchMode: normalizeSearchAliasMatchMode_(entry.matchMode ?? entry.match_mode)
+        };
+        return;
+      }
+
+      result[key] = {
+        aliases: Array.isArray(entry)
+          ? entry.map(v => String(v || "").trim()).filter(Boolean)
+          : parseAliasesCell(entry),
+        triggerMode: "EXACT",
+        matchMode: "WORD"
+      };
+    });
+
+    return result;
+  }
+
+  function isEnabledModeOverride_(value) {
+    const text = String(value ?? "").trim().toUpperCase();
+    return ["TRUE", "1", "Y", "YES", "ON", "ㅇ"].includes(text);
+  }
+
+  function normalizeSearchAliasTriggerMode_(value, defaultMode = "EXACT") {
+    const text = String(value ?? "").trim().toUpperCase();
+    const normalizedDefault = defaultMode === "PARTIAL" ? "PARTIAL" : "EXACT";
+    if (text === "EXACT") return "EXACT";
+    if (text === "PARTIAL") return "PARTIAL";
+    if (isEnabledModeOverride_(text)) return normalizedDefault === "PARTIAL" ? "EXACT" : "PARTIAL";
+    if (["FALSE", "0", "N", "NO", "OFF"].includes(text)) return normalizedDefault;
+    return normalizedDefault;
+  }
+
+  function normalizeSearchAliasMatchMode_(value, defaultMode = "WORD") {
+    const text = String(value ?? "").trim().toUpperCase();
+    const normalizedDefault = defaultMode === "SUBSTRING" ? "SUBSTRING" : "WORD";
+    if (text === "WORD") return "WORD";
+    if (text === "SUBSTRING") return "SUBSTRING";
+    if (isEnabledModeOverride_(text)) return normalizedDefault === "SUBSTRING" ? "WORD" : "SUBSTRING";
+    if (["FALSE", "0", "N", "NO", "OFF"].includes(text)) return normalizedDefault;
+    return normalizedDefault;
   }
 
   function parseAliasesCell(value) {
@@ -1325,6 +1377,53 @@
     const target = String(keyName || "").trim();
     const row = (rows || []).find(item => String(item.key || "").trim() === target);
     return row ? String(row.value || "").trim() : "";
+  }
+
+  function normalizeCsvCacheStorageKeys_() {
+    try {
+      const groups = new Map();
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key || !key.startsWith(CSV_CACHE_PREFIX)) continue;
+
+        let canonicalKey = key.replace(/_v\d+$/, "");
+        if (new RegExp(`^${CSV_CACHE_PREFIX}songbook_g\\d+$`).test(canonicalKey)) {
+          canonicalKey = `${CSV_CACHE_PREFIX}songbook`;
+        }
+        if (!groups.has(canonicalKey)) groups.set(canonicalKey, []);
+        groups.get(canonicalKey).push(key);
+      }
+
+      groups.forEach((keys, canonicalKey) => {
+        if (keys.length === 1 && keys[0] === canonicalKey) return;
+
+        const candidates = keys.map(key => {
+          try {
+            const raw = localStorage.getItem(key);
+            const value = raw ? JSON.parse(raw) : null;
+            if (!value || typeof value !== "object" || !Array.isArray(value.rows)) return null;
+            return { raw, value };
+          } catch {
+            return null;
+          }
+        }).filter(Boolean);
+
+        candidates.sort((a, b) =>
+          compareVersionText(b.value.version, a.value.version) ||
+          Number(b.value.saved_at || 0) - Number(a.value.saved_at || 0)
+        );
+
+        const best = candidates[0];
+        if (best) localStorage.setItem(canonicalKey, best.raw);
+        else localStorage.removeItem(canonicalKey);
+
+        keys.forEach(key => {
+          if (key !== canonicalKey) localStorage.removeItem(key);
+        });
+      });
+    } catch (err) {
+      debugLog("[CSV 캐시 키 정리 실패]", err);
+    }
   }
 
   async function loadVersionedCsvRows({ cacheName, url, version, forceNetwork = false, parser = parseCsv }) {
@@ -1423,6 +1522,7 @@
 
   function applySearchAliasesFromDataJson_(payload) {
     if (isLocalDevelopmentHost_() || !hasEmbeddedSearchAliases_(payload)) return false;
+    if (Number(payload.searchAliasesSchemaVersion) !== SEARCH_ALIASES_DATA_SCHEMA_VERSION) return false;
     const jsonVersion = getPayloadSearchAliasesVersion_(payload);
     if (!jsonVersion) return false;
 
@@ -6287,18 +6387,65 @@
   }
 
   function matchesSearchQuery(song, mode, query) {
-    const exactTerms = Array.isArray(query.exactTerms) ? query.exactTerms : [];
     const terms = Array.isArray(query.terms) ? query.terms : [];
+    const aliasTerms = Array.isArray(query.aliasTerms) ? query.aliasTerms : [];
+    const fields = getSearchFieldValues(song, mode).filter(Boolean);
 
-    if (exactTerms.length) {
-      const exactValues = new Set(getSearchFieldValues(song, mode).map(normalizeSearchText).filter(Boolean));
-      if (exactTerms.some(term => exactValues.has(term))) return true;
-      if (query.exactOnly) return false;
+    if (terms.length) {
+      const directMatchModes = Array.isArray(query.directMatchModes) && query.directMatchModes.length
+        ? query.directMatchModes
+        : ["SUBSTRING"];
+      const directTermText = String(query.directTermText || terms[0] || "");
+      const normalizedDirectTerms = terms.map(normalizeSearchText).filter(Boolean);
+      const haystack = normalizeSearchText(fields.join(" "));
+      const directTermMatches = directMatchModes.some(matchMode => {
+        if (matchMode === "SUBSTRING") {
+          return normalizedDirectTerms.some(term => haystack.includes(term));
+        }
+        return fields.some(value => matchesSearchAliasWord_(value, directTermText));
+      });
+      if (directTermMatches) return true;
     }
 
-    if (!terms.length) return false;
-    const haystack = getSearchHaystack(song, mode);
-    return terms.some(term => haystack.includes(term));
+    if (!aliasTerms.length) return false;
+    return aliasTerms.some(aliasTerm => {
+      if (!aliasTerm || !aliasTerm.term) return false;
+      if (aliasTerm.matchMode === "SUBSTRING") {
+        const needle = normalizeSearchText(aliasTerm.term);
+        return Boolean(needle) && fields.some(value => normalizeSearchText(value).includes(needle));
+      }
+      return fields.some(value => matchesSearchAliasWord_(value, aliasTerm.term));
+    });
+  }
+
+  function normalizeSearchTextForWordMatch_(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFKC")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/[’‘`]/g, "'")
+      .replace(/[‐‑–—]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function escapeSearchRegex_(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function matchesSearchAliasWord_(field, alias) {
+    const haystack = normalizeSearchTextForWordMatch_(field);
+    const needle = normalizeSearchTextForWordMatch_(alias);
+    if (!haystack || !needle) return false;
+
+    const phrasePattern = needle.split(" ").map(escapeSearchRegex_).join("\\s+");
+    try {
+      const pattern = new RegExp(`(^|[^\\p{L}\\p{N}_])${phrasePattern}(?=$|[^\\p{L}\\p{N}_])`, "u");
+      return pattern.test(haystack);
+    } catch (err) {
+      const escaped = phrasePattern.replace(/\\s\+/g, "\\s+");
+      return new RegExp(`(^|\\s|[^a-z0-9])${escaped}(?=$|\\s|[^a-z0-9])`).test(haystack);
+    }
   }
 
   function refreshDayFilterOptions() {
@@ -11745,47 +11892,52 @@
   }
 
   function buildSearchQuery(keyword) {
-    if (!keyword) return { terms: [], exactTerms: [], exactOnly: false };
+    if (!keyword) return { terms: [], aliasTerms: [], directMatchModes: [] };
 
-    const normalTerms = new Set([keyword]);
-    const exactTerms = new Set();
-    let exactOnly = false;
+    const normalizedKeyword = normalizeSearchText(keyword);
+    if (!normalizedKeyword) return { terms: [], aliasTerms: [], directMatchModes: [] };
 
-    Object.entries(searchAliases).forEach(([base, entry]) => {
-      const normalizedBase = normalizeSearchText(base);
-      const aliasList = normalizeSearchAliasList(entry);
-      const normalizedAliases = aliasList
-        .map(normalizeSearchText)
-        .filter(Boolean);
+    const entries = Object.entries(searchAliases).map(([word, entry]) => {
+      const normalizedWord = normalizeSearchText(word);
+      if (!normalizedWord) return null;
+      const triggerMode = normalizeSearchAliasTriggerMode_(entry && typeof entry === "object" ? entry.triggerMode ?? entry.trigger_mode : "");
+      const matchMode = normalizeSearchAliasMatchMode_(entry && typeof entry === "object" ? entry.matchMode ?? entry.match_mode : "");
+      return { word, entry, normalizedWord, triggerMode, matchMode };
+    }).filter(Boolean);
 
-      if (isExactSearchAlias(entry)) {
-        if (keyword === normalizedBase) {
-          exactOnly = true;
-          const exactTargets = normalizedAliases.length ? normalizedAliases : [normalizedBase];
-          exactTargets.forEach(term => {
-            if (term) exactTerms.add(term);
-          });
-        }
-        return;
-      }
+    const exactMatches = entries.filter(item =>
+      item.triggerMode === "EXACT" && item.normalizedWord === normalizedKeyword
+    );
+    const triggeredEntries = exactMatches.length
+      ? exactMatches
+      : entries.filter(item => item.triggerMode === "PARTIAL" && (
+          item.normalizedWord.includes(normalizedKeyword) || normalizedKeyword.includes(item.normalizedWord)
+        ));
 
-      const matched = Boolean(normalizedBase) && (normalizedBase.includes(keyword) || keyword.includes(normalizedBase));
-      if (matched) {
-        [normalizedBase, ...normalizedAliases].forEach(term => {
-          if (term) normalTerms.add(term);
-        });
-      }
+    const aliasTerms = new Map();
+    const directMatchModes = new Set();
+    triggeredEntries.forEach(({ entry, matchMode }) => {
+      const aliases = normalizeSearchAliasList(entry);
+      directMatchModes.add(matchMode);
+      aliases.forEach(term => {
+        const rawTerm = String(term || "").trim();
+        const normalizedTerm = normalizeSearchTextForWordMatch_(rawTerm);
+        if (!normalizedTerm) return;
+        const key = `${matchMode}\u0000${normalizedTerm}`;
+        if (!aliasTerms.has(key)) aliasTerms.set(key, { term: rawTerm, matchMode });
+      });
     });
 
     return {
-      terms: exactOnly ? [] : [...normalTerms],
-      exactTerms: [...exactTerms],
-      exactOnly
+      terms: [normalizedKeyword],
+      directTermText: normalizeSearchTextForWordMatch_(keyword),
+      directMatchModes: [...directMatchModes],
+      aliasTerms: [...aliasTerms.values()]
     };
   }
 
   function hasSearchQuery(query) {
-    return Boolean(query && ((query.terms && query.terms.length) || (query.exactTerms && query.exactTerms.length)));
+    return Boolean(query && ((query.terms && query.terms.length) || (query.aliasTerms && query.aliasTerms.length)));
   }
 
   function normalizeSearchAliasList(entry) {
@@ -11794,12 +11946,9 @@
     return [];
   }
 
-  function isExactSearchAlias(entry) {
-    return Boolean(entry && typeof entry === "object" && entry.exact);
-  }
-
   function expandSearchTerms(keyword) {
-    return buildSearchQuery(keyword).terms;
+    const query = buildSearchQuery(keyword);
+    return [...new Set([...(query.terms || []), ...(query.aliasTerms || []).map(item => normalizeSearchText(item.term))])];
   }
 
   function uniqueSorted(values, numericDesc = false, numericAsc = false) {
