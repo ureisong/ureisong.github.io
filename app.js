@@ -2591,11 +2591,7 @@
   }
   
   function isDesktopContextCopyEnabled() {
-    if (window.matchMedia) {
-      if (window.matchMedia("(max-width: 720px)").matches) return false;
-      if (window.matchMedia("(pointer: coarse)").matches) return false;
-    }
-    return true;
+    return isDesktopPointerEnvironment_();
   }
 
   async function copyDateGroupInfoToClipboard(key) {
