@@ -1,3 +1,4 @@
+
 name: Update song data and share pages
 
 on:
@@ -14,15 +15,7 @@ on:
       - "search_aliases.js"
       - "manifest.webmanifest"
       - "404.html"
-      - "public/app.js"
-      - "public/config.js"
-      - "public/index.html"
-      - "public/style.css"
-      - "public/search_aliases.js"
-      - "public/manifest.webmanifest"
-      - "public/404.html"
       - "data.json"
-      - "public/data.json"
       - "tools/build_data_json.py"
       - ".github/workflows/update-data-json.yml"
 
@@ -44,17 +37,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Prepare website files in repository root
-        run: |
-          for file in app.js config.js index.html style.css search_aliases.js manifest.webmanifest 404.html; do
-            if [ -f "public/$file" ]; then
-              cp "public/$file" "$file"
-            fi
-          done
-          test -f app.js
-          test -f config.js
-          test -f index.html
 
       - name: Check syntax
         run: |
@@ -101,14 +83,8 @@ jobs:
           print(f"공유 페이지 생성 확인: {len(songs)}곡")
           PY
 
-      - name: Remove ZIP-layout copy from repository
-        run: |
-          # Keep public/ in distributed ZIP files only. The live repository
-          # deploys from its root, so remove the duplicate archive-layout tree.
-          rm -rf public
-
-      - name: Commit root website and generated files
+      - name: Commit generated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Update root website, song data and share pages"
+          commit_message: "Update song data and share pages"
           file_pattern: "."
