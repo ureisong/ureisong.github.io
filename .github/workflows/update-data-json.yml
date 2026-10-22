@@ -45,25 +45,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Prepare build files
+      - name: Prepare website files in repository root
         run: |
-          mkdir -p public
           for file in app.js config.js index.html style.css search_aliases.js manifest.webmanifest 404.html; do
-            if [ -f "$file" ]; then
-              cp "$file" public/
+            if [ -f "public/$file" ]; then
+              cp "public/$file" "$file"
             fi
           done
-          if [ -f data.json ]; then
-            cp data.json public/data.json
-          fi
-          test -f public/app.js
-          test -f public/config.js
-          test -f public/index.html
-          test -f public/data.json
+          test -f app.js
+          test -f config.js
+          test -f index.html
 
       - name: Check syntax
         run: |
-          node --check public/app.js
+          node --check app.js
           python -m py_compile tools/build_data_json.py
           if [ -f apps_script/Code.gs ]; then
             cp apps_script/Code.gs /tmp/Code.js
@@ -72,6 +67,8 @@ jobs:
 
       - name: Build data and share pages
         env:
+          SITE_SOURCE_DIR: .
+          SITE_OUTPUT_DIR: .
           SONGS_CSV_URL: ${{ secrets.SONGS_CSV_URL }}
           LIKES_SMR_CSV_URL: ${{ secrets.LIKES_SMR_CSV_URL }}
           NOTICE_CSV_URL: ${{ secrets.NOTICE_CSV_URL }}
@@ -87,9 +84,9 @@ jobs:
           from pathlib import Path
           from tools.build_data_json import share_page_filename
 
-          payload = json.loads(Path("public/data.json").read_text(encoding="utf-8"))
+          payload = json.loads(Path("data.json").read_text(encoding="utf-8"))
           songs = payload.get("data", []) if isinstance(payload, dict) else []
-          share_dir = Path("public/share")
+          share_dir = Path("share")
           missing = [
               str(song.get("id", "")).strip()
               for song in songs
@@ -104,14 +101,14 @@ jobs:
           print(f"공유 페이지 생성 확인: {len(songs)}곡")
           PY
 
-      - name: Copy generated files to website root
+      - name: Remove ZIP-layout copy from repository
         run: |
-          cp public/data.json data.json
-          mkdir -p share
-          rsync -a --delete public/share/ share/
+          # Keep public/ in distributed ZIP files only. The live repository
+          # deploys from its root, so remove the duplicate archive-layout tree.
+          rm -rf public
 
-      - name: Commit generated files
+      - name: Commit root website and generated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Update song data and share pages"
-          file_pattern: "data.json share public/data.json public/share"
+          commit_message: "Update root website, song data and share pages"
+          file_pattern: "."
