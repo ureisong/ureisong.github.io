@@ -2831,6 +2831,11 @@
     scrollToFilterSection();
   }
 
+  function getModalTitleFilterValue_(song, fallbackText = "") {
+    const searchableTitle = song ? getSearchableDisplayTitle_(song) : "";
+    return String(searchableTitle || fallbackText || "").trim();
+  }
+
   function applyModalInfoFilter_(el, target = null) {
     if (!isModalInfoFilterAllowed_(el)) return;
 
@@ -2841,6 +2846,9 @@
     let text = baseText;
     if (type === "artist") {
       text = getModalArtistFilterValueFromTarget_(target) || selectModalArtistFilterValue_(getModalArtistFilterValues_(baseText));
+    } else {
+      const song = findSongById(currentModalSongId);
+      text = getModalTitleFilterValue_(song, baseText);
     }
 
     applyModalFilterValue_(type, text);
@@ -5013,6 +5021,33 @@
     });
   }
 
+  function getModalActionTooltip_(el, value = "") {
+    const label = String(value || "").trim();
+    const isArtistChip = Boolean(el && el.classList && el.classList.contains("modal-artist-chip"));
+    const isArtist = isArtistChip || el === els.modalSongArtist;
+    const targetName = isArtist ? "아티스트명" : "곡명";
+    const filterTarget = isArtist ? "아티스트로" : "곡명으로";
+
+    if (isMobileLongPressCopyEnabled_()) {
+      if (isArtistChip) {
+        return `짧게 누르면 '${label}'을 복사합니다. 길게 누르면 해당 아티스트로 필터링합니다.`;
+      }
+      return `짧게 누르면 ${targetName}을 복사합니다. 길게 누르면 ${filterTarget} 필터링합니다.`;
+    }
+
+    if (isDesktopPointerEnvironment_()) {
+      if (isArtistChip) {
+        return `클릭하면 '${label}'을 복사합니다. 우클릭하면 해당 아티스트로 필터링합니다.`;
+      }
+      return `클릭하면 ${targetName}을 복사합니다. 우클릭하면 ${filterTarget} 필터링합니다.`;
+    }
+
+    if (isArtistChip) {
+      return `클릭하면 '${label}'을 복사합니다. 길게 누르거나 우클릭하면 해당 아티스트로 필터링합니다.`;
+    }
+    return `클릭하면 ${targetName}을 복사합니다. 길게 누르거나 우클릭하면 ${filterTarget} 필터링합니다.`;
+  }
+
   function appendModalScrollingTextContent_(inner, value, options = {}) {
     const text = String(value || "");
     const hasArtistParts = Array.isArray(options.artistParts);
@@ -5037,8 +5072,8 @@
       button.dataset.modalFilterValue = filterValue;
       button.dataset.copyText = label;
       button.textContent = label;
-      button.title = `클릭하면 '${label}'을 복사합니다. 길게 누르면 해당 아티스트로 필터링합니다.`;
-      button.setAttribute("aria-label", `아티스트 ${label}`);
+      button.title = getModalActionTooltip_(button, label);
+      button.setAttribute("aria-label", `아티스트 ${label}. ${button.title}`);
       inner.appendChild(button);
     });
   }
@@ -5048,7 +5083,7 @@
 
     const value = String(text || "");
     el.dataset.copyText = value;
-    el.title = value ? "클릭하면 복사됩니다" : "";
+    el.title = value ? getModalActionTooltip_(el, value) : "";
     el.innerHTML = "";
     el.classList.remove("modal-marquee-active");
     el.style.removeProperty("--modal-marquee-distance");
@@ -5113,8 +5148,11 @@
     refreshPlayingTabTitle_();
     if (!els.modalSongTitle) return;
     const song = currentModalSongId ? allSongs.find(item => item.id === currentModalSongId) : null;
-    const tooltip = getSongTitleTooltip_(song);
-    if (tooltip) els.modalSongTitle.title = tooltip;
+    const songTooltip = getSongTitleTooltip_(song);
+    const actionTooltip = currentModalTitleText
+      ? getModalActionTooltip_(els.modalSongTitle, currentModalTitleText)
+      : "";
+    els.modalSongTitle.title = [songTooltip, actionTooltip].filter(Boolean).join(" · ");
   }
 
   function setModalArtistText_(text) {

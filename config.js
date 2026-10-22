@@ -11,5 +11,5 @@ window.APP_CONFIG = {
   NOTICE_TEXT: "",
   NOTICE_SPEED_PX_PER_SECOND: 30,
   FOOTER_TEXT: "",
-  COUNTER: "kimotaku"
+  COUNTER: "urangieru"
 };
