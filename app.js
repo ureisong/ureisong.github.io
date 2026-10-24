@@ -694,6 +694,7 @@
       select.addEventListener("change", () => {
         applyFilterResultPanelState({ preserveSung: true });
         refreshDayFilterOptions();
+        updateFilterToggleButtonState_();
         applyAndRender(true, { syncSungForFilters: true });
         updateFilterHeaderSummary_();
       });
@@ -1073,6 +1074,7 @@
       el.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
+        if (isModalInfoActionDisabled_()) return;
         if (el.dataset.modalLongPressFilter === "1") {
           el.dataset.modalLongPressFilter = "";
           return;
@@ -1087,6 +1089,11 @@
         copyModalInfoText_(clickedArtistChip && el.contains(clickedArtistChip) ? clickedArtistChip : el);
       });
       el.addEventListener("contextmenu", event => {
+        if (isModalInfoActionDisabled_()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if (!isDesktopContextCopyEnabled()) return;
         if (!isModalInfoFilterAllowed_(el)) return;
         event.preventDefault();
@@ -2757,6 +2764,14 @@
       .trim();
   }
 
+  function isModalInfoActionDisabled_() {
+    if (!playlistPlayback || !playlistPlayback.active || playlistPlayback.finished) return false;
+    const entry = playlistPlayback.queue && playlistPlayback.queue[playlistPlayback.index];
+    const playable = getPlaylistPlayableItem_(entry);
+    const section = String(playable && playable.section || "").trim();
+    return Boolean(playable && playable.type === "external" && ["커버곡", "오리지널 곡", "추천 플레이리스트"].includes(section));
+  }
+
   function getModalInfoText_(el) {
     return stripModalActionMarkers_(el && (el.dataset.copyText || el.textContent) || "");
   }
@@ -2780,7 +2795,7 @@
   }
 
   function isModalInfoFilterAllowed_(el) {
-    if (!el) return false;
+    if (!el || isModalInfoActionDisabled_()) return false;
     if (!currentModalSongId) return false;
     return Boolean(findSongById(currentModalSongId));
   }
@@ -2822,13 +2837,9 @@
 
     closeYoutubeModal();
     resetFilters();
-    applyFilterResultPanelState();
-    setFilterDetailsOpen_(true);
     if (els.searchInput) els.searchInput.value = value;
     if (els.searchMode) els.searchMode.value = type === "artist" ? "artist" : "title";
-    applyAndRender(true, { syncSungForFilters: true });
-    updateFilterHeaderSummary_();
-    scrollToFilterSection();
+    applyFiltersAndNavigateToDate_();
   }
 
   function getModalTitleFilterValue_(song, fallbackText = "") {
@@ -2881,12 +2892,13 @@
     };
 
     const triggerFilter = target => {
+      if (isModalInfoActionDisabled_()) return;
       markLongPressHandled();
       applyModalInfoFilter_(el, target);
     };
 
     el.addEventListener("pointerdown", event => {
-      if (!isMobileLongPressCopyEnabled_()) return;
+      if (isModalInfoActionDisabled_() || !isMobileLongPressCopyEnabled_()) return;
       if (event.pointerType === "mouse" || event.pointerType === "touch") return;
       clear();
       pointerId = event.pointerId;
@@ -2904,7 +2916,7 @@
     });
 
     el.addEventListener("touchstart", event => {
-      if (!isMobileLongPressCopyEnabled_()) return;
+      if (isModalInfoActionDisabled_() || !isMobileLongPressCopyEnabled_()) return;
       const touch = event.touches && event.touches[0];
       if (!touch) return;
       event.preventDefault();
@@ -2929,7 +2941,7 @@
 
     ["touchend", "touchcancel"].forEach(type => {
       el.addEventListener(type, event => {
-        if (!isMobileLongPressCopyEnabled_()) return;
+        if (isModalInfoActionDisabled_() || !isMobileLongPressCopyEnabled_()) return;
         event.preventDefault();
         event.stopPropagation();
         const wasTap = Boolean(timer) && !touchTriggered;
@@ -4102,9 +4114,21 @@
 
   function updateFilterToggleButtonState_() {
     const hasActiveFilters = hasActiveFilterValues_();
+    const filterDetailsOpen = Boolean(els.filterDetails && els.filterDetails.open);
+    const hasNonDefaultSearchMode = Boolean(filterDetailsOpen && els.searchMode && String(els.searchMode.value || "all") !== "all");
     if (els.filterToggleButton) {
-      els.filterToggleButton.classList.toggle("has-active-filter", hasActiveFilters);
+      els.filterToggleButton.classList.toggle("has-active-filter", hasActiveFilters || hasNonDefaultSearchMode);
     }
+    [
+      [els.searchMode, String(els.searchMode && els.searchMode.value || "all") !== "all"],
+      [els.yearFilter, Boolean(els.yearFilter && getFilterValues(els.yearFilter).length)],
+      [els.monthFilter, Boolean(els.monthFilter && getFilterValues(els.monthFilter).length)],
+      [els.dayFilter, Boolean(els.dayFilter && getFilterValues(els.dayFilter).length)],
+      [els.countryFilter, Boolean(els.countryFilter && getFilterValues(els.countryFilter).length)],
+      [els.categoryFilter, Boolean(els.categoryFilter && getFilterValues(els.categoryFilter).length)]
+    ].forEach(([select, hasNonDefaultValue]) => {
+      if (select) select.classList.toggle("has-non-default-filter", filterDetailsOpen && hasNonDefaultValue);
+    });
     if (els.resetButton) {
       const label = hasActiveFilters ? "필터 초기화" : "닫기";
       if (els.resetButton.textContent !== label) els.resetButton.textContent = label;
@@ -5022,6 +5046,7 @@
   }
 
   function getModalActionTooltip_(el, value = "") {
+    if (isModalInfoActionDisabled_()) return "";
     const label = String(value || "").trim();
     const isArtistChip = Boolean(el && el.classList && el.classList.contains("modal-artist-chip"));
     const isArtist = isArtistChip || el === els.modalSongArtist;
@@ -5082,8 +5107,15 @@
     if (!el) return;
 
     const value = String(text || "");
+    const actionsDisabled = isModalInfoActionDisabled_();
     el.dataset.copyText = value;
-    el.title = value ? getModalActionTooltip_(el, value) : "";
+    el.classList.toggle("modal-info-actions-disabled", actionsDisabled);
+    if (actionsDisabled) {
+      el.removeAttribute("title");
+      el.removeAttribute("aria-label");
+    } else {
+      el.title = value ? getModalActionTooltip_(el, value) : "";
+    }
     el.innerHTML = "";
     el.classList.remove("modal-marquee-active");
     el.style.removeProperty("--modal-marquee-distance");
@@ -5147,6 +5179,11 @@
     setModalScrollingText_(els.modalSongTitle, currentModalTitleText);
     refreshPlayingTabTitle_();
     if (!els.modalSongTitle) return;
+    if (isModalInfoActionDisabled_()) {
+      els.modalSongTitle.removeAttribute("title");
+      els.modalSongTitle.removeAttribute("aria-label");
+      return;
+    }
     const song = currentModalSongId ? allSongs.find(item => item.id === currentModalSongId) : null;
     const songTooltip = getSongTitleTooltip_(song);
     const actionTooltip = currentModalTitleText
@@ -5158,7 +5195,7 @@
   function setModalArtistText_(text) {
     const artistChips = getModalArtistChipDescriptors_(text);
     currentModalArtistText = artistChips.map(item => item.label).filter(Boolean).join(" & ");
-    setModalScrollingText_(els.modalSongArtist, currentModalArtistText, { artistParts: artistChips });
+    setModalScrollingText_(els.modalSongArtist, currentModalArtistText, isModalInfoActionDisabled_() ? {} : { artistParts: artistChips });
     refreshPlayingTabTitle_();
   }
 
@@ -8749,6 +8786,7 @@
     els.filterSummaryHelp.setAttribute("aria-expanded", expanded ? "true" : "false");
     els.filterSummaryHelp.setAttribute("aria-label", expanded ? "필터 접기" : "필터 펼치기");
     els.filterSummaryHelp.title = expanded ? "필터 접기" : "필터 펼치기";
+    updateFilterToggleButtonState_();
   }
 
   function setFilterDetailsOpen_(open) {

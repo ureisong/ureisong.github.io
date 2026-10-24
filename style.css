@@ -1124,6 +1124,11 @@ html.dark-mode .like-button.liking {
   text-shadow: none;
 }
 
+.modal-song-title.modal-info-actions-disabled,
+.modal-song-artist.modal-info-actions-disabled {
+  cursor: default;
+}
+
 .modal-song-artist .modal-marquee-inner {
   display: inline-flex;
   align-items: center;
@@ -4496,6 +4501,10 @@ body {
 }
 
 .filter-tool-toggle.has-active-filter {
+  animation: filter-toggle-breathe 2.8s ease-in-out infinite;
+}
+
+.filter-details[open] select.has-non-default-filter {
   animation: filter-toggle-breathe 2.8s ease-in-out infinite;
 }
 
